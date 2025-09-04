@@ -20,6 +20,23 @@ This document lists all the import changes needed to make BEVFormer compatible w
 | `from mmdet.core.bbox import BaseBBoxCoder` | `from mmdet.models.task_modules.coders import BaseBBoxCoder` | Moved to task_modules |
 | `from mmdet.core.bbox.builder import BBOX_CODERS` | `from mmdet.registry import TASK_UTILS as BBOX_CODERS` | Registry centralized |
 | `from mmdet.core.bbox.match_costs.builder import MATCH_COST` | `from mmdet.registry import TASK_UTILS as MATCH_COST` | Registry centralized |
+| `from mmcv.parallel import DataContainer as DC` | `from mmengine.structures import BaseDataElement as DC` | DataContainer deprecated |
+| `from mmcv.runner import DistEvalHook as BaseDistEvalHook` | `from mmengine.hooks import Hook as BaseDistEvalHook` | Runner system moved to mmengine |
+| `from mmcv.runner import EvalHook as BaseEvalHook` | `from mmengine.hooks import Hook as BaseEvalHook` | Runner system moved to mmengine |
+| `from mmdet.core.evaluation.eval_hooks import DistEvalHook` | `from mmengine.evaluator import Evaluator as DistEvalHook` | Evaluation system redesigned |
+| `from mmdet3d.core.bbox.iou_calculators import BboxOverlaps3D` | `from mmdet3d.structures import BboxOverlaps3D` | Moved to structures |
+| `from mmcv.runner import force_fp32, auto_fp16` | `from mmengine.runner.amp import autocast` | Use context manager with dtype |
+| `from mmdet.models.builder import HEADS` | `from mmdet.registry import MODELS as HEADS` | Registry consolidated |
+| `from mmcv.parallel import collate` | `from mmengine.dataset import pseudo_collate as collate` | Moved to mmengine |
+| `from mmcv.runner import get_dist_info` | `from mmengine.dist import get_dist_info` | Moved to mmengine |
+| `from mmcv.utils import Registry, build_from_cfg` | `from mmengine.registry import Registry, build_from_cfg` | Moved to mmengine |
+| `from mmdet.datasets.samplers import GroupSampler` | Use custom or `from torch.utils.data import RandomSampler` | Sampler system redesigned |
+| `from mmdet.datasets.builder import PIPELINES` | `from mmdet.registry import TRANSFORMS as PIPELINES` | Registry renamed |
+| `from mmdet3d.datasets.pipelines import DefaultFormatBundle3D` | `from mmdet3d.datasets.transforms import Pack3DDetInputs` | Module renamed, class replaced |
+| `from mmdet.datasets.builder import _concat_dataset` | Implement custom or use `ConcatDataset` | Private function removed |
+| `from mmdet.core import multi_apply, reduce_mean` | `from mmdet.models.utils import multi_apply`<br>`from mmdet.utils import reduce_mean` | Core module reorganized |
+| `from mmdet3d.core.bbox.coders import build_bbox_coder` | Use `build_from_cfg` with `TASK_UTILS` registry | Builder pattern changed |
+| `from mmcv.cnn import Linear, bias_init_with_prob` | `from torch.nn import Linear`<br>`from mmdet.models.utils import bias_init_with_prob` | NN modules reorganized |
 
 ## Usage Pattern Changes
 

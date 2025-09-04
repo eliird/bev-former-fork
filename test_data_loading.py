@@ -13,7 +13,8 @@ import numpy as np
 from mmengine import Config
 # from mmdet3d.datasets import build_dataset
 from mmengine.registry import build_from_cfg
-from projects.mmdet3d_plugin.datasets.nuscenes_dataset import CustomNuScenesDataset
+# Import to register the dataset
+from projects.mmdet3d_plugin import *
 
 
 def test_basic_imports():
@@ -66,14 +67,15 @@ def test_custom_dataset():
     print("Testing custom dataset class...")
     
     try:
-        # Test basic dataset configuration
+        # Test basic dataset configuration (minimal config)
         dataset_cfg = dict(
             type='CustomNuScenesDataset',
             data_root='data/nuscenes/',
             ann_file='data/nuscenes/nuscenes_infos_temporal_train.pkl',
             pipeline=[],
             test_mode=False,
-            use_valid_flag=True,
+            metainfo=dict(classes=['car', 'truck', 'bus', 'trailer', 'construction_vehicle',
+                                  'pedestrian', 'motorcycle', 'bicycle', 'traffic_cone', 'barrier']),
         )
         
         print("✓ Dataset configuration created")
@@ -128,8 +130,8 @@ def test_data_loading_pipeline():
         dataset_cfg.data_root = 'data/nuscenes/'
         
         # Try to build dataset
-        # dataset = build_dataset(dataset_cfg)
-        dataset = build_from_cfg(dataset_cfg, CustomNuScenesDataset)
+        from mmdet3d.registry import DATASETS
+        dataset = build_from_cfg(dataset_cfg, DATASETS)
         print(f"✓ Dataset built successfully")
         print(f"  - Dataset length: {len(dataset)}")
         print(f"  - Dataset type: {type(dataset).__name__}")
