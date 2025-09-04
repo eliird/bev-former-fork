@@ -410,7 +410,7 @@ def export_2d_annotation(root_path, info_path, version, mono3d=True):
     ]
     coco_ann_id = 0
     coco_2d_dict = dict(annotations=[], images=[], categories=cat2Ids)
-    for info in mmcv.track_iter_progress(nusc_infos):
+    for info in track_iter_progress(nusc_infos):
         for cam in camera_types:
             cam_info = info['cams'][cam]
             coco_infos = get_2d_boxes(
@@ -444,7 +444,7 @@ def export_2d_annotation(root_path, info_path, version, mono3d=True):
         json_prefix = f'{info_path[:-4]}_mono3d'
     else:
         json_prefix = f'{info_path[:-4]}'
-    mmcv.dump(coco_2d_dict, f'{json_prefix}.coco.json')
+    dump(coco_2d_dict, f'{json_prefix}.coco.json')
 
 
 def get_2d_boxes(nusc,
@@ -665,9 +665,9 @@ def generate_record(ann_rec: dict, x1: float, y1: float, x2: float, y2: float,
     coco_rec['image_id'] = sample_data_token
     coco_rec['area'] = (y2 - y1) * (x2 - x1)
 
-    if repro_rec['category_name'] not in NuScenesDataset.NameMapping:
+    if repro_rec['category_name'] not in NuScenesDataset.METAINFO['classes']:
         return None
-    cat_name = NuScenesDataset.NameMapping[repro_rec['category_name']]
+    cat_name = repro_rec['category_name'] # NuScenesDataset.NameMapping[repro_rec['category_name']]
     coco_rec['category_name'] = cat_name
     coco_rec['category_id'] = nus_categories.index(cat_name)
     coco_rec['bbox'] = [x1, y1, x2 - x1, y2 - y1]
