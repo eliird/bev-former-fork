@@ -14,6 +14,7 @@ from pyquaternion import Quaternion
 from shapely.geometry import MultiPoint, box
 from typing import List, Tuple, Union
 from mmengine.utils import track_iter_progress
+from mmengine import dump, load # instead of mmcv.dump and mmcv.load
 
 # from mmdet3d.core.bbox.box_np_ops import points_cam2img
 from mmdet3d.datasets.convert_utils import points_cam2img
@@ -98,18 +99,18 @@ def create_nuscenes_infos(root_path,
         data = dict(infos=train_nusc_infos, metadata=metadata)
         info_path = osp.join(out_path,
                              '{}_infos_temporal_test.pkl'.format(info_prefix))
-        mmcv.dump(data, info_path)
+        dump(data, info_path)
     else:
         print('train sample: {}, val sample: {}'.format(
             len(train_nusc_infos), len(val_nusc_infos)))
         data = dict(infos=train_nusc_infos, metadata=metadata)
         info_path = osp.join(out_path,
                              '{}_infos_temporal_train.pkl'.format(info_prefix))
-        mmcv.dump(data, info_path)
+        dump(data, info_path)
         data['infos'] = val_nusc_infos
         info_val_path = osp.join(out_path,
                                  '{}_infos_temporal_val.pkl'.format(info_prefix))
-        mmcv.dump(data, info_val_path)
+        dump(data, info_val_path)
 
 
 def get_available_scenes(nusc):
@@ -400,7 +401,7 @@ def export_2d_annotation(root_path, info_path, version, mono3d=True):
         'CAM_BACK_LEFT',
         'CAM_BACK_RIGHT',
     ]
-    nusc_infos = mmcv.load(info_path)['infos']
+    nusc_infos = load(info_path)['infos']
     nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
     # info_2d_list = []
     cat2Ids = [
