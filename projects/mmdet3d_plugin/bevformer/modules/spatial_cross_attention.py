@@ -10,16 +10,18 @@ import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import xavier_init, constant_init
-from mmcv.cnn.bricks.registry import (ATTENTION,
-                                      TRANSFORMER_LAYER,
-                                      TRANSFORMER_LAYER_SEQUENCE)
+# from mmcv.cnn import xavier_init, constant_init
+from mmengine.model.weight_init import xavier_init, constant_init
+# from mmcv.cnn.bricks.registry import (ATTENTION,
+#                                       TRANSFORMER_LAYER,
+#                                       TRANSFORMER_LAYER_SEQUENCE)
+from mmengine.registry import MODELS
 from mmcv.cnn.bricks.transformer import build_attention
 import math
-from mmcv.runner import force_fp32, auto_fp16
-
-from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
-
+# from mmcv.runner import force_fp32, auto_fp16
+from mmengine.runner.amp import autocast
+# from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
+from mmengine.model import BaseModule, ModuleList, Sequential
 from mmcv.utils import ext_loader
 from .multi_scale_deformable_attn_function import MultiScaleDeformableAttnFunction_fp32, \
     MultiScaleDeformableAttnFunction_fp16
@@ -28,7 +30,7 @@ ext_module = ext_loader.load_ext(
     '_ext', ['ms_deform_attn_backward', 'ms_deform_attn_forward'])
 
 
-@ATTENTION.register_module()
+@MODELS.register_module()
 class SpatialCrossAttention(BaseModule):
     """An attention module used in BEVFormer.
     Args:
@@ -72,7 +74,7 @@ class SpatialCrossAttention(BaseModule):
         """Default initialization for Parameters of Module."""
         xavier_init(self.output_proj, distribution='uniform', bias=0.)
     
-    @force_fp32(apply_to=('query', 'key', 'value', 'query_pos', 'reference_points_cam'))
+    # @force_fp32(apply_to=('query', 'key', 'value', 'query_pos', 'reference_points_cam'))
     def forward(self,
                 query,
                 key,
@@ -130,52 +132,52 @@ class SpatialCrossAttention(BaseModule):
             slots = torch.zeros_like(query)
         if query_pos is not None:
             query = query + query_pos
+        with autocast(enabled=True, dtype=torch.float32):
+            bs, num_query, _ = query.size()
 
-        bs, num_query, _ = query.size()
+            D = reference_points_cam.size(3)
+            indexes = []
+            for i, mask_per_img in enumerate(bev_mask):
+                index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
+                indexes.append(index_query_per_img)
+            max_len = max([len(each) for each in indexes])
 
-        D = reference_points_cam.size(3)
-        indexes = []
-        for i, mask_per_img in enumerate(bev_mask):
-            index_query_per_img = mask_per_img[0].sum(-1).nonzero().squeeze(-1)
-            indexes.append(index_query_per_img)
-        max_len = max([len(each) for each in indexes])
+            # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
+            queries_rebatch = query.new_zeros(
+                [bs, self.num_cams, max_len, self.embed_dims])
+            reference_points_rebatch = reference_points_cam.new_zeros(
+                [bs, self.num_cams, max_len, D, 2])
+            
+            for j in range(bs):
+                for i, reference_points_per_img in enumerate(reference_points_cam):   
+                    index_query_per_img = indexes[i]
+                    queries_rebatch[j, i, :len(index_query_per_img)] = query[j, index_query_per_img]
+                    reference_points_rebatch[j, i, :len(index_query_per_img)] = reference_points_per_img[j, index_query_per_img]
 
-        # each camera only interacts with its corresponding BEV queries. This step can  greatly save GPU memory.
-        queries_rebatch = query.new_zeros(
-            [bs, self.num_cams, max_len, self.embed_dims])
-        reference_points_rebatch = reference_points_cam.new_zeros(
-            [bs, self.num_cams, max_len, D, 2])
-        
-        for j in range(bs):
-            for i, reference_points_per_img in enumerate(reference_points_cam):   
-                index_query_per_img = indexes[i]
-                queries_rebatch[j, i, :len(index_query_per_img)] = query[j, index_query_per_img]
-                reference_points_rebatch[j, i, :len(index_query_per_img)] = reference_points_per_img[j, index_query_per_img]
+            num_cams, l, bs, embed_dims = key.shape
 
-        num_cams, l, bs, embed_dims = key.shape
+            key = key.permute(2, 0, 1, 3).reshape(
+                bs * self.num_cams, l, self.embed_dims)
+            value = value.permute(2, 0, 1, 3).reshape(
+                bs * self.num_cams, l, self.embed_dims)
 
-        key = key.permute(2, 0, 1, 3).reshape(
-            bs * self.num_cams, l, self.embed_dims)
-        value = value.permute(2, 0, 1, 3).reshape(
-            bs * self.num_cams, l, self.embed_dims)
+            queries = self.deformable_attention(query=queries_rebatch.view(bs*self.num_cams, max_len, self.embed_dims), key=key, value=value,
+                                                reference_points=reference_points_rebatch.view(bs*self.num_cams, max_len, D, 2), spatial_shapes=spatial_shapes,
+                                                level_start_index=level_start_index).view(bs, self.num_cams, max_len, self.embed_dims)
+            for j in range(bs):
+                for i, index_query_per_img in enumerate(indexes):
+                    slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)]
 
-        queries = self.deformable_attention(query=queries_rebatch.view(bs*self.num_cams, max_len, self.embed_dims), key=key, value=value,
-                                            reference_points=reference_points_rebatch.view(bs*self.num_cams, max_len, D, 2), spatial_shapes=spatial_shapes,
-                                            level_start_index=level_start_index).view(bs, self.num_cams, max_len, self.embed_dims)
-        for j in range(bs):
-            for i, index_query_per_img in enumerate(indexes):
-                slots[j, index_query_per_img] += queries[j, i, :len(index_query_per_img)]
+            count = bev_mask.sum(-1) > 0
+            count = count.permute(1, 2, 0).sum(-1)
+            count = torch.clamp(count, min=1.0)
+            slots = slots / count[..., None]
+            slots = self.output_proj(slots)
 
-        count = bev_mask.sum(-1) > 0
-        count = count.permute(1, 2, 0).sum(-1)
-        count = torch.clamp(count, min=1.0)
-        slots = slots / count[..., None]
-        slots = self.output_proj(slots)
-
-        return self.dropout(slots) + inp_residual
+            return self.dropout(slots) + inp_residual
 
 
-@ATTENTION.register_module()
+@MODELS.register_module()
 class MSDeformableAttention3D(BaseModule):
     """An attention module used in BEVFormer based on Deformable-Detr.
     `Deformable DETR: Deformable Transformers for End-to-End Object Detection.

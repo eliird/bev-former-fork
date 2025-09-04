@@ -10,13 +10,14 @@ import warnings
 import torch
 import torch.nn as nn
 
-from mmcv import ConfigDict, deprecated_api_warning
+# from mmcv import ConfigDict, deprecated_api_warning
+from mmengine import ConfigDict, deprecated_api_warning
 from mmcv.cnn import Linear, build_activation_layer, build_norm_layer
-from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
+from mmengine.model import BaseModule, ModuleList, Sequential
 
-from mmcv.cnn.bricks.registry import (ATTENTION, FEEDFORWARD_NETWORK, POSITIONAL_ENCODING,
-                                      TRANSFORMER_LAYER, TRANSFORMER_LAYER_SEQUENCE)
-
+# from mmcv.cnn.bricks.registry import (ATTENTION, FEEDFORWARD_NETWORK, POSITIONAL_ENCODING,
+#                                       TRANSFORMER_LAYER, TRANSFORMER_LAYER_SEQUENCE)
+from mmengine.registry import MODELS
 # Avoid BC-breaking of importing MultiScaleDeformableAttention from this file
 try:
     from mmcv.ops.multi_scale_deform_attn import MultiScaleDeformableAttention  # noqa F401
@@ -34,7 +35,7 @@ except ImportError:
 from mmcv.cnn.bricks.transformer import build_feedforward_network, build_attention
 
 
-@TRANSFORMER_LAYER.register_module()
+@MODELS.register_module()
 class MyCustomBaseTransformerLayer(BaseModule):
     """Base `TransformerLayer` for vision transformer.
     It can be built from `mmcv.ConfigDict` and support more flexible

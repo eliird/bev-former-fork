@@ -1,10 +1,12 @@
 import torch
 import torch.nn as nn
-from mmcv.cnn import xavier_init
+# from mmcv.cnn import xavier_init
+from mmengine.model.weight_init import xavier_init
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
-from mmdet.models.utils.builder import TRANSFORMER
+# from mmdet.models.utils.builder import TRANSFORMER
+from mmdet.registry import MODELS
 from torch.nn.init import normal_
-from mmcv.runner.base_module import BaseModule
+from mmengine.model import BaseModule
 from .temporal_self_attention import TemporalSelfAttention
 from .spatial_cross_attention import MSDeformableAttention3D
 from .decoder import CustomMSDeformableAttention
@@ -51,7 +53,7 @@ class ResNetFusion(BaseModule):
         return x
 
 
-@TRANSFORMER.register_module()
+@MODELS.register_module()
 class PerceptionTransformerBEVEncoder(BaseModule):
     def __init__(self,
                  num_feature_levels=4,
@@ -173,7 +175,7 @@ class PerceptionTransformerBEVEncoder(BaseModule):
         return prev_bev
 
 
-@TRANSFORMER.register_module()
+@MODELS.register_module()
 class PerceptionTransformerV2(PerceptionTransformerBEVEncoder):
     """Implements the Detr3D transformer.
     Args:

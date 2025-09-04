@@ -7,7 +7,8 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from mmcv.cnn import xavier_init
+# from mmcv.cnn import xavier_init
+from mmengine.model.weight_init import xavier_init
 from mmcv.cnn.bricks.transformer import build_transformer_layer_sequence
 # from mmcv.runner.base_module import BaseModule
 from mmengine.model import BaseModule

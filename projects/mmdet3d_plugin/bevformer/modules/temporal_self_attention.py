@@ -10,19 +10,22 @@ from mmcv.ops.multi_scale_deform_attn import multi_scale_deformable_attn_pytorch
 import warnings
 import torch
 import torch.nn as nn
-from mmcv.cnn import xavier_init, constant_init
-from mmcv.cnn.bricks.registry import ATTENTION
+# from mmcv.cnn import xavier_init, constant_init
+from mmengine.model.weight_init import xavier_init, constant_init
+# from mmcv.cnn.bricks.registry import ATTENTION
+from mmengine.registry import MODELS
 import math
-from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
-from mmcv.utils import (ConfigDict, build_from_cfg, deprecated_api_warning,
-                        to_2tuple)
+# from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
+from mmengine.model import BaseModule, ModuleList, Sequential
+# from mmcv.utils import (ConfigDict, build_from_cfg, deprecated_api_warning,
+#                         to_2tuple)
 
 from mmcv.utils import ext_loader
 ext_module = ext_loader.load_ext(
     '_ext', ['ms_deform_attn_backward', 'ms_deform_attn_forward'])
 
 
-@ATTENTION.register_module()
+@MODELS.register_module()
 class TemporalSelfAttention(BaseModule):
     """An attention module used in BEVFormer based on Deformable-Detr.
 

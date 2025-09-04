@@ -5,9 +5,12 @@
 # ---------------------------------------------
 
 import torch
-from mmcv.runner import force_fp32, auto_fp16
-from mmdet.models import DETECTORS
-from mmdet3d.core import bbox3d2result
+# from mmcv.runner import force_fp32, auto_fp16
+from mmengine.runner.amp import autocast
+# from mmdet.models import DETECTORS
+from mmdet.registry import MODELS
+# from mmdet3d.core import bbox3d2result
+from mmdet3d.structures import bbox3d2result
 from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
 from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
 import time
@@ -17,7 +20,7 @@ import mmdet3d
 from projects.mmdet3d_plugin.models.utils.bricks import run_time
 
 
-@DETECTORS.register_module()
+@MODELS.register_module()
 class BEVFormer(MVXTwoStageDetector):
     """BEVFormer.
     Args:
@@ -99,13 +102,13 @@ class BEVFormer(MVXTwoStageDetector):
                 img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
         return img_feats_reshaped
 
-    @auto_fp16(apply_to=('img'))
+    # @auto_fp16(apply_to=('img'))
     def extract_feat(self, img, img_metas=None, len_queue=None):
         """Extract features from images and points."""
-
-        img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
-        
-        return img_feats
+        with autocast(enabled=True, dtype=torch.float16):
+            img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
+            
+            return img_feats
 
 
     def forward_pts_train(self,
@@ -176,7 +179,7 @@ class BEVFormer(MVXTwoStageDetector):
             self.train()
             return prev_bev
 
-    @auto_fp16(apply_to=('img', 'points'))
+    # @auto_fp16(apply_to=('img', 'points'))
     def forward_train(self,
                       points=None,
                       img_metas=None,
@@ -213,25 +216,25 @@ class BEVFormer(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
-        
-        len_queue = img.size(1)
-        prev_img = img[:, :-1, ...]
-        img = img[:, -1, ...]
+        with autocast(enabled=True, dtype=torch.float16):
+            len_queue = img.size(1)
+            prev_img = img[:, :-1, ...]
+            img = img[:, -1, ...]
 
-        prev_img_metas = copy.deepcopy(img_metas)
-        prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
+            prev_img_metas = copy.deepcopy(img_metas)
+            prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
 
-        img_metas = [each[len_queue-1] for each in img_metas]
-        if not img_metas[0]['prev_bev_exists']:
-            prev_bev = None
-        img_feats = self.extract_feat(img=img, img_metas=img_metas)
-        losses = dict()
-        losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
-                                            gt_labels_3d, img_metas,
-                                            gt_bboxes_ignore, prev_bev)
+            img_metas = [each[len_queue-1] for each in img_metas]
+            if not img_metas[0]['prev_bev_exists']:
+                prev_bev = None
+            img_feats = self.extract_feat(img=img, img_metas=img_metas)
+            losses = dict()
+            losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d,
+                                                gt_labels_3d, img_metas,
+                                                gt_bboxes_ignore, prev_bev)
 
-        losses.update(losses_pts)
-        return losses
+            losses.update(losses_pts)
+            return losses
 
     def forward_test(self, img_metas, img=None, **kwargs):
         for var, name in [(img_metas, 'img_metas')]:

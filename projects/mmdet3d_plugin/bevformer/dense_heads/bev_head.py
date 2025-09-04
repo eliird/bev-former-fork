@@ -34,6 +34,7 @@ from mmdet3d.models.dense_heads.free_anchor3d_head import FreeAnchor3DHead
 # from mmdet3d.models.builder import build_head
 from mmengine.registry import build_from_cfg
 from mmdet.registry import MODELS
+from mmengine.model import BaseModule, ModuleList, Sequential
 
 
 def build_transformer(cfg):

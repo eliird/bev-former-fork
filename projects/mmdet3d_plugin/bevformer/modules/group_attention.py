@@ -8,14 +8,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from mmcv.cnn import (Linear, build_activation_layer, build_conv_layer, build_norm_layer)
-from mmcv.runner.base_module import BaseModule, ModuleList, Sequential
-from mmcv.utils import (ConfigDict, build_from_cfg, deprecated_api_warning, to_2tuple)
+from mmengine.model import BaseModule, ModuleList, Sequential
+# from mmcv.utils import (ConfigDict, build_from_cfg, deprecated_api_warning, to_2tuple)
+from mmengine.utils import deprecated_api_warning
 from mmcv.cnn.bricks.drop import build_dropout
-from mmcv.cnn.bricks.registry import (ATTENTION, FEEDFORWARD_NETWORK, POSITIONAL_ENCODING, TRANSFORMER_LAYER,
-                                      TRANSFORMER_LAYER_SEQUENCE)
+# from mmcv.cnn.bricks.registry import (ATTENTION, FEEDFORWARD_NETWORK, POSITIONAL_ENCODING, TRANSFORMER_LAYER,
+#                                       TRANSFORMER_LAYER_SEQUENCE)
+from mmengine.registry import MODELS
 
-
-@ATTENTION.register_module()
+@MODELS.register_module()
 class GroupMultiheadAttention(BaseModule):
     """A wrapper for ``torch.nn.MultiheadAttention``.
     This module implements MultiheadAttention with identity connection,
