@@ -10,8 +10,9 @@ sys.path.append('.')
 
 import torch
 import numpy as np
-from mmcv import Config
-from mmdet3d.datasets import build_dataset
+from mmengine import Config
+# from mmdet3d.datasets import build_dataset
+from mmengine.registry import build_from_cfg
 from projects.mmdet3d_plugin.datasets.nuscenes_dataset import CustomNuScenesDataset
 
 
@@ -127,7 +128,8 @@ def test_data_loading_pipeline():
         dataset_cfg.data_root = 'data/nuscenes/'
         
         # Try to build dataset
-        dataset = build_dataset(dataset_cfg)
+        # dataset = build_dataset(dataset_cfg)
+        dataset = build_from_cfg(dataset_cfg, CustomNuScenesDataset)
         print(f"✓ Dataset built successfully")
         print(f"  - Dataset length: {len(dataset)}")
         print(f"  - Dataset type: {type(dataset).__name__}")

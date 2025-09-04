@@ -1,17 +1,18 @@
 import copy
 
 import numpy as np
-from mmdet.datasets import DATASETS
+# from mmdet.datasets import DATASETS
+from mmdet.registry import DATASETS
 from mmdet3d.datasets import NuScenesDataset
 import mmcv
 from os import path as osp
-from mmdet.datasets import DATASETS
+# from mmdet.datasets import DATASETS --- IGNORE ---
 import torch
 import numpy as np
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from .nuscnes_eval import NuScenesEval_custom
 from projects.mmdet3d_plugin.models.utils.visual import save_tensor
-from mmcv.parallel import DataContainer as DC
+# from mmcv.parallel import DataContainer as DC # data container has been removed use directo tensor operations
 import random
 
 
@@ -78,8 +79,8 @@ class CustomNuScenesDataset(NuScenesDataset):
                 metas_map[i]['can_bus'][-1] -= prev_angle
                 prev_pos = copy.deepcopy(tmp_pos)
                 prev_angle = copy.deepcopy(tmp_angle)
-        queue[-1]['img'] = DC(torch.stack(imgs_list), cpu_only=False, stack=True)
-        queue[-1]['img_metas'] = DC(metas_map, cpu_only=True)
+        queue[-1]['img'] = torch.stack(imgs_list) # DC(torch.stack(imgs_list), cpu_only=False, stack=True)
+        queue[-1]['img_metas'] = metas_map # DC(metas_map, cpu_only=True)
         queue = queue[-1]
         return queue
 
