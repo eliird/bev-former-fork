@@ -1,10 +1,11 @@
 import numpy as np
 from numpy import random
 import mmcv
-from mmdet.datasets.builder import PIPELINES
-from mmcv.parallel import DataContainer as DC
+# from mmdet.datasets.builder import PIPELINES
+from mmdet.registry import TRANSFORMS
+# from mmcv.parallel import DataContainer as DC
 
-@PIPELINES.register_module()
+@TRANSFORMS.register_module()
 class PadMultiViewImage(object):
     """Pad the multi-view image.
     There are two padding modes: (1) pad to a fixed size and (2) pad to the
@@ -58,7 +59,7 @@ class PadMultiViewImage(object):
         return repr_str
 
 
-@PIPELINES.register_module()
+@TRANSFORMS.register_module()
 class NormalizeMultiviewImage(object):
     """Normalize the image.
     Added key is "img_norm_cfg".
@@ -95,7 +96,7 @@ class NormalizeMultiviewImage(object):
         return repr_str
 
 
-@PIPELINES.register_module()
+@TRANSFORMS.register_module()
 class PhotoMetricDistortionMultiViewImage:
     """Apply photometric distortion to image sequentially, every transformation
     is applied with a probability of 0.5. The position of random contrast is in
@@ -196,7 +197,7 @@ class PhotoMetricDistortionMultiViewImage:
 
 
 
-@PIPELINES.register_module()
+@TRANSFORMS.register_module()
 class CustomCollect3D(object):
     """Collect data from the loader relevant to the specific task.
     This is usually the last stage of the data loader pipeline. Typically keys
@@ -273,7 +274,7 @@ class CustomCollect3D(object):
             if key in results:
                 img_metas[key] = results[key]
 
-        data['img_metas'] = DC(img_metas, cpu_only=True)
+        data['img_metas'] = img_metas # DC(img_metas, cpu_only=True)
         for key in self.keys:
             if key not in results:
                 data[key] = None 
@@ -288,7 +289,7 @@ class CustomCollect3D(object):
 
 
 
-@PIPELINES.register_module()
+@TRANSFORMS.register_module()
 class RandomScaleImageMultiViewImage(object):
     """Random scale the image
     Args:

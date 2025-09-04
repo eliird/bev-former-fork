@@ -2,12 +2,13 @@ import copy
 from mmdet3d.datasets import NuScenesDataset
 import mmcv
 from os import path as osp
-from mmdet.datasets import DATASETS
+# from mmdet.datasets import DATASETS
+from mmdet.registry import DATASETS
 import torch
 import numpy as np
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from .nuscnes_eval import NuScenesEval_custom
-from mmcv.parallel import DataContainer as DC
+# from mmcv.parallel import DataContainer as DC
 from collections import defaultdict, OrderedDict
 from projects.mmdet3d_plugin.dd3d.datasets.nuscenes import NuscenesDataset as DD3DNuscenesDataset
 
@@ -135,9 +136,9 @@ class CustomNuScenesDatasetV2(NuScenesDataset):
                 metas_map[i]['lidaradj2lidarcurr'] = lidaradj2lidarcurr
                 for i_cam in range(len(metas_map[i]['lidar2img'])):
                     metas_map[i]['lidar2img'][i_cam] = metas_map[i]['lidar2img'][i_cam] @ np.linalg.inv(lidaradj2lidarcurr)
-        queue[0]['img'] = DC(torch.stack(imgs_list),
-                              cpu_only=False, stack=True)
-        queue[0]['img_metas'] = DC(metas_map, cpu_only=True)
+        queue[0]['img'] = torch.stack(imgs_list) # DC(torch.stack(imgs_list),
+                            #   cpu_only=False, stack=True)
+        queue[0]['img_metas'] = metas_map # DC(metas_map, cpu_only=True)
         queue = queue[0]
         return queue
 

@@ -4,7 +4,8 @@ import torch.nn.functional as F
 from torch import nn
 
 from detectron2.layers import Conv2d, cat, get_norm
-from mmcv.runner import force_fp32
+# from mmcv.runner import force_fp32
+from mmengine.runner.amp import autocast
 
 from projects.mmdet3d_plugin.dd3d.layers.normalization import ModuleListDial, Offset, Scale
 from .disentangled_box3d_loss import DisentangledBox3DLoss
@@ -233,98 +234,99 @@ class FCOS3DLoss(nn.Module):
         self.num_classes = num_classes
         self.class_agnostic = class_agnostic
 
-    @force_fp32(apply_to=('box3d_quat', 'box3d_ctr', 'box3d_depth', 'box3d_size','box3d_conf', 'inv_intrinsics'))
+    # @force_fp32(apply_to=('box3d_quat', 'box3d_ctr', 'box3d_depth', 'box3d_size','box3d_conf', 'inv_intrinsics'))
     def forward(
         self, box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, dense_depth, inv_intrinsics, fcos2d_info,
         targets
     ):
-        labels = targets['labels']
-        box3d_targets = targets['box3d_targets']
-        pos_inds = targets["pos_inds"]
+        with autocast(enabled=True, dtype=torch.float32):
+            labels = targets['labels']
+            box3d_targets = targets['box3d_targets']
+            pos_inds = targets["pos_inds"]
 
-        if pos_inds.numel() == 0:
-            losses = {
-                "loss_box3d_quat": torch.stack([x.sum() * 0. for x in box3d_quat]).sum(), 
-                "loss_box3d_proj_ctr": torch.stack([x.sum() * 0. for x in box3d_ctr]).sum(),
-                "loss_box3d_depth": torch.stack([x.sum() * 0. for x in box3d_depth]).sum(),
-                "loss_box3d_size": torch.stack([x.sum() * 0. for x in box3d_size]).sum(),
-                "loss_conf3d": torch.stack([x.sum() * 0. for x in box3d_conf]).sum()
-            }
-            return losses
+            if pos_inds.numel() == 0:
+                losses = {
+                    "loss_box3d_quat": torch.stack([x.sum() * 0. for x in box3d_quat]).sum(), 
+                    "loss_box3d_proj_ctr": torch.stack([x.sum() * 0. for x in box3d_ctr]).sum(),
+                    "loss_box3d_depth": torch.stack([x.sum() * 0. for x in box3d_depth]).sum(),
+                    "loss_box3d_size": torch.stack([x.sum() * 0. for x in box3d_size]).sum(),
+                    "loss_conf3d": torch.stack([x.sum() * 0. for x in box3d_conf]).sum()
+                }
+                return losses
 
-        if len(labels) != len(box3d_targets):
-            raise ValueError(
-                f"The size of 'labels' and 'box3d_targets' does not match: a={len(labels)}, b={len(box3d_targets)}"
+            if len(labels) != len(box3d_targets):
+                raise ValueError(
+                    f"The size of 'labels' and 'box3d_targets' does not match: a={len(labels)}, b={len(box3d_targets)}"
+                )
+
+            num_classes = self.num_classes if not self.class_agnostic else 1
+
+            box3d_quat_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 4, num_classes) for x in box3d_quat])
+            box3d_ctr_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 2, num_classes) for x in box3d_ctr])
+            box3d_depth_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, num_classes) for x in box3d_depth])
+            box3d_size_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 3, num_classes) for x in box3d_size])
+            box3d_conf_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, num_classes) for x in box3d_conf])
+
+            # ----------------------
+            # 3D box disentangled loss
+            # ----------------------
+            box3d_targets = box3d_targets[pos_inds]
+
+            box3d_quat_pred = box3d_quat_pred[pos_inds]
+            box3d_ctr_pred = box3d_ctr_pred[pos_inds]
+            box3d_depth_pred = box3d_depth_pred[pos_inds]
+            box3d_size_pred = box3d_size_pred[pos_inds]
+            box3d_conf_pred = box3d_conf_pred[pos_inds]
+
+            if self.class_agnostic:
+                box3d_quat_pred = box3d_quat_pred.squeeze(-1)
+                box3d_ctr_pred = box3d_ctr_pred.squeeze(-1)
+                box3d_depth_pred = box3d_depth_pred.squeeze(-1)
+                box3d_size_pred = box3d_size_pred.squeeze(-1)
+                box3d_conf_pred = box3d_conf_pred.squeeze(-1)
+            else:
+                I = labels[pos_inds][..., None, None]
+                box3d_quat_pred = torch.gather(box3d_quat_pred, dim=2, index=I.repeat(1, 4, 1)).squeeze(-1)
+                box3d_ctr_pred = torch.gather(box3d_ctr_pred, dim=2, index=I.repeat(1, 2, 1)).squeeze(-1)
+                box3d_depth_pred = torch.gather(box3d_depth_pred, dim=1, index=I.squeeze(-1)).squeeze(-1)
+                box3d_size_pred = torch.gather(box3d_size_pred, dim=2, index=I.repeat(1, 3, 1)).squeeze(-1)
+                box3d_conf_pred = torch.gather(box3d_conf_pred, dim=1, index=I.squeeze(-1)).squeeze(-1)
+
+            canon_box_sizes = box3d_quat_pred.new_tensor(self.canon_box_sizes)[labels[pos_inds]]
+
+            locations = targets["locations"][pos_inds]
+            im_inds = targets["im_inds"][pos_inds]
+            inv_intrinsics = inv_intrinsics[im_inds]
+
+            box3d_pred = predictions_to_boxes3d(
+                box3d_quat_pred,
+                box3d_ctr_pred,
+                box3d_depth_pred,
+                box3d_size_pred,
+                locations,
+                inv_intrinsics,
+                canon_box_sizes,
+                self.min_depth,
+                self.max_depth,
+                scale_depth_by_focal_lengths_factor=self.scale_depth_by_focal_lengths_factor,
+                scale_depth_by_focal_lengths=self.scale_depth_by_focal_lengths,
+                quat_is_allocentric=self.predict_allocentric_rot,
+                depth_is_distance=self.predict_distance
             )
 
-        num_classes = self.num_classes if not self.class_agnostic else 1
+            centerness_targets = fcos2d_info["centerness_targets"]
+            loss_denom = fcos2d_info["loss_denom"]
+            losses_box3d, box3d_l1_error = self.box3d_reg_loss_fn(box3d_pred, box3d_targets, locations, centerness_targets)
 
-        box3d_quat_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 4, num_classes) for x in box3d_quat])
-        box3d_ctr_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 2, num_classes) for x in box3d_ctr])
-        box3d_depth_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, num_classes) for x in box3d_depth])
-        box3d_size_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 3, num_classes) for x in box3d_size])
-        box3d_conf_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, num_classes) for x in box3d_conf])
+            losses_box3d = {k: self.box3d_loss_weight * v / loss_denom for k, v in losses_box3d.items()}
 
-        # ----------------------
-        # 3D box disentangled loss
-        # ----------------------
-        box3d_targets = box3d_targets[pos_inds]
+            conf_3d_targets = torch.exp(-1. / self.conf_3d_temperature * box3d_l1_error)
+            loss_conf3d = F.binary_cross_entropy_with_logits(box3d_conf_pred, conf_3d_targets, reduction='none')
+            loss_conf3d = self.conf3d_loss_weight * (loss_conf3d * centerness_targets).sum() / loss_denom
 
-        box3d_quat_pred = box3d_quat_pred[pos_inds]
-        box3d_ctr_pred = box3d_ctr_pred[pos_inds]
-        box3d_depth_pred = box3d_depth_pred[pos_inds]
-        box3d_size_pred = box3d_size_pred[pos_inds]
-        box3d_conf_pred = box3d_conf_pred[pos_inds]
+            losses = {"loss_conf3d": loss_conf3d, **losses_box3d}
 
-        if self.class_agnostic:
-            box3d_quat_pred = box3d_quat_pred.squeeze(-1)
-            box3d_ctr_pred = box3d_ctr_pred.squeeze(-1)
-            box3d_depth_pred = box3d_depth_pred.squeeze(-1)
-            box3d_size_pred = box3d_size_pred.squeeze(-1)
-            box3d_conf_pred = box3d_conf_pred.squeeze(-1)
-        else:
-            I = labels[pos_inds][..., None, None]
-            box3d_quat_pred = torch.gather(box3d_quat_pred, dim=2, index=I.repeat(1, 4, 1)).squeeze(-1)
-            box3d_ctr_pred = torch.gather(box3d_ctr_pred, dim=2, index=I.repeat(1, 2, 1)).squeeze(-1)
-            box3d_depth_pred = torch.gather(box3d_depth_pred, dim=1, index=I.squeeze(-1)).squeeze(-1)
-            box3d_size_pred = torch.gather(box3d_size_pred, dim=2, index=I.repeat(1, 3, 1)).squeeze(-1)
-            box3d_conf_pred = torch.gather(box3d_conf_pred, dim=1, index=I.squeeze(-1)).squeeze(-1)
-
-        canon_box_sizes = box3d_quat_pred.new_tensor(self.canon_box_sizes)[labels[pos_inds]]
-
-        locations = targets["locations"][pos_inds]
-        im_inds = targets["im_inds"][pos_inds]
-        inv_intrinsics = inv_intrinsics[im_inds]
-
-        box3d_pred = predictions_to_boxes3d(
-            box3d_quat_pred,
-            box3d_ctr_pred,
-            box3d_depth_pred,
-            box3d_size_pred,
-            locations,
-            inv_intrinsics,
-            canon_box_sizes,
-            self.min_depth,
-            self.max_depth,
-            scale_depth_by_focal_lengths_factor=self.scale_depth_by_focal_lengths_factor,
-            scale_depth_by_focal_lengths=self.scale_depth_by_focal_lengths,
-            quat_is_allocentric=self.predict_allocentric_rot,
-            depth_is_distance=self.predict_distance
-        )
-
-        centerness_targets = fcos2d_info["centerness_targets"]
-        loss_denom = fcos2d_info["loss_denom"]
-        losses_box3d, box3d_l1_error = self.box3d_reg_loss_fn(box3d_pred, box3d_targets, locations, centerness_targets)
-
-        losses_box3d = {k: self.box3d_loss_weight * v / loss_denom for k, v in losses_box3d.items()}
-
-        conf_3d_targets = torch.exp(-1. / self.conf_3d_temperature * box3d_l1_error)
-        loss_conf3d = F.binary_cross_entropy_with_logits(box3d_conf_pred, conf_3d_targets, reduction='none')
-        loss_conf3d = self.conf3d_loss_weight * (loss_conf3d * centerness_targets).sum() / loss_denom
-
-        losses = {"loss_conf3d": loss_conf3d, **losses_box3d}
-
-        return losses
+            return losses
 
 
 class FCOS3DInference():

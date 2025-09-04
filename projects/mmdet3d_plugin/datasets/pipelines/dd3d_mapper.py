@@ -1,14 +1,15 @@
 import copy
 import numpy as np
 import torch
-from mmcv.parallel.data_container import DataContainer as DC
-from mmdet.datasets.builder import PIPELINES
+# from mmcv.parallel.data_container import DataContainer as DC
+# from mmdet.datasets.builder import PIPELINES
+from mmdet.registry import TRANSFORMS
 from projects.mmdet3d_plugin.dd3d.datasets.transform_utils import annotations_to_instances
 from projects.mmdet3d_plugin.dd3d.structures.pose import Pose
 from projects.mmdet3d_plugin.dd3d.utils.tasks import TaskManager
 
 
-@PIPELINES.register_module()
+@TRANSFORMS.register_module()
 class DD3DMapper:
     def __init__(self,
                  is_train: bool = True,
@@ -89,6 +90,6 @@ class DD3DMapper:
         if box_num == 0:
             return None
 
-        mono_input_dict = DC(mono_input_dict, cpu_only=True)
+        mono_input_dict = mono_input_dict # DC(mono_input_dict, cpu_only=True)
         results['mono_input_dict'] = mono_input_dict
         return results

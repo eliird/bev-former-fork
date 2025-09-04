@@ -9,8 +9,10 @@ from detectron2.layers import Conv2d, cat
 from detectron2.modeling.postprocessing import detector_postprocess as resize_instances
 from detectron2.structures import Instances
 from detectron2.utils import comm as d2_comm
-from mmdet.models.builder import HEADS
-from mmcv.runner import force_fp32
+# from mmdet.models.builder import HEADS
+from mmdet.registry import MODELS
+# from mmcv.runner import force_fp32
+from mmengine.runner.amp import autocast
 
 from projects.mmdet3d_plugin.dd3d.datasets.nuscenes import MAX_NUM_ATTRIBUTES
 from .core import DD3D
@@ -207,76 +209,78 @@ class NuscenesLoss(nn.Module):
         self.attr_loss_weight = attr_loss_weight
         self.speed_loss_weight = speed_loss_weight
 
-    @force_fp32(apply_to=('attr_logits', 'speeds'))
+    # @force_fp32(apply_to=('attr_logits', 'speeds'))
     def forward(self, attr_logits, speeds, fcos2d_info, targets):
         # Flatten predictions
-        attr_logits = cat([x.permute(0, 2, 3, 1).reshape(-1, MAX_NUM_ATTRIBUTES) for x in attr_logits])
-        speeds = cat([x.permute(0, 2, 3, 1).reshape(-1) for x in speeds])
+        
+        with autocast(enabled=True, dtype=torch.float32):
+            attr_logits = cat([x.permute(0, 2, 3, 1).reshape(-1, MAX_NUM_ATTRIBUTES) for x in attr_logits])
+            speeds = cat([x.permute(0, 2, 3, 1).reshape(-1) for x in speeds])
 
-        pos_inds = targets['pos_inds']
+            pos_inds = targets['pos_inds']
 
-        losses = {}
+            losses = {}
 
-        # 1. Attributes
-        attr_logits = attr_logits[pos_inds]
-        target_attr = targets['attributes'][pos_inds]
-        valid_attr_mask = target_attr != MAX_NUM_ATTRIBUTES  # No attrs associated with class, or just attr missing.
+            # 1. Attributes
+            attr_logits = attr_logits[pos_inds]
+            target_attr = targets['attributes'][pos_inds]
+            valid_attr_mask = target_attr != MAX_NUM_ATTRIBUTES  # No attrs associated with class, or just attr missing.
 
-        if pos_inds.numel() == 0:
-            attr_weights = attr_logits.new_tensor(0.0) #torch.tensor(0.0).cuda()
-        else:
-            attr_weights = fcos2d_info['centerness_targets'][valid_attr_mask]
-        # Denominator for all foreground losses -- re-computed for features with valid attributes.
-        # attr_loss_denom = max(reduce_sum(attr_weights.sum()).item() / d2_comm.get_world_size(), 1e-6)
-        # NOTE: compute attr_weights_sum, and then feed it to reduce_sum() works, but not above.
-        attr_weights_sum = attr_weights.sum()
-        attr_loss_denom = max(reduce_sum(attr_weights_sum).item() / d2_comm.get_world_size(), 1e-6)
+            if pos_inds.numel() == 0:
+                attr_weights = attr_logits.new_tensor(0.0) #torch.tensor(0.0).cuda()
+            else:
+                attr_weights = fcos2d_info['centerness_targets'][valid_attr_mask]
+            # Denominator for all foreground losses -- re-computed for features with valid attributes.
+            # attr_loss_denom = max(reduce_sum(attr_weights.sum()).item() / d2_comm.get_world_size(), 1e-6)
+            # NOTE: compute attr_weights_sum, and then feed it to reduce_sum() works, but not above.
+            attr_weights_sum = attr_weights.sum()
+            attr_loss_denom = max(reduce_sum(attr_weights_sum).item() / d2_comm.get_world_size(), 1e-6)
 
-        if valid_attr_mask.sum() == 0:
-            losses.update({"loss_attr": attr_logits.sum() * 0.})
-        else:
-            attr_logits = attr_logits[valid_attr_mask]
-            target_attr = target_attr[valid_attr_mask]
+            if valid_attr_mask.sum() == 0:
+                losses.update({"loss_attr": attr_logits.sum() * 0.})
+            else:
+                attr_logits = attr_logits[valid_attr_mask]
+                target_attr = target_attr[valid_attr_mask]
 
-            xent = F.cross_entropy(attr_logits, target_attr)
-            loss_attr = (xent * attr_weights).sum() / attr_loss_denom
+                xent = F.cross_entropy(attr_logits, target_attr)
+                loss_attr = (xent * attr_weights).sum() / attr_loss_denom
 
-            losses.update({"loss_attr": self.attr_loss_weight * loss_attr})
+                losses.update({"loss_attr": self.attr_loss_weight * loss_attr})
 
-        # 2. Speed
-        speeds = speeds[pos_inds]
-        target_speeds = targets['speeds'][pos_inds]
-        # NOTE: some GT speeds are NaN.
-        valid_gt_mask = torch.logical_not(torch.isnan(target_speeds))
+            # 2. Speed
+            speeds = speeds[pos_inds]
+            target_speeds = targets['speeds'][pos_inds]
+            # NOTE: some GT speeds are NaN.
+            valid_gt_mask = torch.logical_not(torch.isnan(target_speeds))
 
-        if pos_inds.numel() == 0:
-            speed_weights = speeds.new_tensor(0.0) #torch.tensor(0.0).cuda()
-        else:
-            speed_weights = fcos2d_info['centerness_targets'][valid_gt_mask]
-        # Denominator for all foreground losses -- re-computed for features with valid speeds.
-        # speed_loss_denom = max(reduce_sum(speed_weights.sum()).item() / d2_comm.get_world_size(), 1e-6)
-        speed_weights_sum = speed_weights.sum()
-        speed_loss_denom = max(reduce_sum(speed_weights_sum).item() / d2_comm.get_world_size(), 1e-6)
+            if pos_inds.numel() == 0:
+                speed_weights = speeds.new_tensor(0.0) #torch.tensor(0.0).cuda()
+            else:
+                speed_weights = fcos2d_info['centerness_targets'][valid_gt_mask]
+            # Denominator for all foreground losses -- re-computed for features with valid speeds.
+            # speed_loss_denom = max(reduce_sum(speed_weights.sum()).item() / d2_comm.get_world_size(), 1e-6)
+            speed_weights_sum = speed_weights.sum()
+            speed_loss_denom = max(reduce_sum(speed_weights_sum).item() / d2_comm.get_world_size(), 1e-6)
 
-        # NOTE: move after reduce sum
-        if pos_inds.numel() == 0:
-            losses = {"loss_attr": attr_logits.sum() * 0., "loss_speed": speeds.sum() * 0.}
-            # NOTE: This is probably un-reachable, because the training filter images with empty annotations.
-            # NOTE: If not, attr_weights can be unavailable in the reduce_sum below().
+            # NOTE: move after reduce sum
+            if pos_inds.numel() == 0:
+                losses = {"loss_attr": attr_logits.sum() * 0., "loss_speed": speeds.sum() * 0.}
+                # NOTE: This is probably un-reachable, because the training filter images with empty annotations.
+                # NOTE: If not, attr_weights can be unavailable in the reduce_sum below().
+                return losses
+
+            if valid_gt_mask.sum() == 0:
+                losses.update({"loss_speed": speeds.sum() * 0.})
+                # return losses
+            else:
+                speeds = speeds[valid_gt_mask]
+                target_speeds = target_speeds[valid_gt_mask]
+
+                l1_error = smooth_l1_loss(speeds, target_speeds, beta=0.05)
+                loss_speed = (l1_error * speed_weights).sum() / speed_loss_denom
+                losses.update({"loss_speed": self.speed_loss_weight * loss_speed})
+
             return losses
-
-        if valid_gt_mask.sum() == 0:
-            losses.update({"loss_speed": speeds.sum() * 0.})
-            # return losses
-        else:
-            speeds = speeds[valid_gt_mask]
-            target_speeds = target_speeds[valid_gt_mask]
-
-            l1_error = smooth_l1_loss(speeds, target_speeds, beta=0.05)
-            loss_speed = (l1_error * speed_weights).sum() / speed_loss_denom
-            losses.update({"loss_speed": self.speed_loss_weight * loss_speed})
-
-        return losses
 
 
 class NuscenesInference():
@@ -310,7 +314,7 @@ class NuscenesInference():
                     instances_lvl[i].pred_speeds = speed_per_im
 
 
-@HEADS.register_module()
+@MODELS.register_module()
 class NuscenesDD3D(DD3D):
     def __init__(self, 
                  num_classes,
@@ -373,150 +377,151 @@ class NuscenesDD3D(DD3D):
         # NOTE: NuScenes evaluator allows max. 500 detections per sample.
         # self.max_num_dets_per_sample = cfg.DD3D.NUSC.INFERENCE.MAX_NUM_DETS_PER_SAMPLE
 
-    @force_fp32(apply_to=('features'))
+    # @force_fp32(apply_to=('features'))
     def forward(self, features, batched_inputs):
-        # NOTE:
-        # images = [x["image"].to(self.device) for x in batched_inputs]
-        # images = [self.preprocess_image(x) for x in images]
+        with autocast(enabled=True, dtype=torch.float32):
+            # NOTE:
+            # images = [x["image"].to(self.device) for x in batched_inputs]
+            # images = [self.preprocess_image(x) for x in images]
 
-        # NOTE: directly use inv_intrinsics
-        # if 'intrinsics' in batched_inputs[0]:
-        #     intrinsics = [x['intrinsics'].to(self.device) for x in batched_inputs]
-        # else:
-        #     intrinsics = None
-        # images = ImageList.from_tensors(images, self.backbone.size_divisibility, intrinsics=intrinsics)
-        if 'inv_intrinsics' in batched_inputs[0]:
-            inv_intrinsics = [x['inv_intrinsics'].to(features[0].device) for x in batched_inputs]
-            inv_intrinsics = torch.stack(inv_intrinsics, dim=0)
-        else:
-            inv_intrinsics = None
-
-        # NOTE:
-        # gt_dense_depth = None
-        # if 'depth' in batched_inputs[0]:
-        #     gt_dense_depth = [x["depth"].to(self.device) for x in batched_inputs]
-        #     gt_dense_depth = ImageList.from_tensors(
-        #         gt_dense_depth, self.backbone.size_divisibility, intrinsics=intrinsics
-        #     )
-
-        # NOTE: directly input feature
-        # features = self.backbone(images.tensor)
-        # features = [features[f] for f in self.in_features]
-
-        if "instances" in batched_inputs[0]:
-            gt_instances = [x["instances"].to(features[0].device) for x in batched_inputs]
-        else:
-            gt_instances = None
-
-        locations = self.compute_locations(features)
-        logits, box2d_reg, centerness, fcos2d_extra_output = self.fcos2d_head(features)
-        if not self.only_box2d:
-            box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, dense_depth = self.fcos3d_head(features)
-        # NOTE: directly use inv_intrinsics
-        # inv_intrinsics = images.intrinsics.inverse() if images.intrinsics is not None else None
-
-        # --------------------------------------------------------------------------
-        # NuScenes predictions -- attribute / speed, computed from cls_tower output.
-        # --------------------------------------------------------------------------
-        attr_logits, speeds = [], []
-        for x in fcos2d_extra_output['cls_tower_out']:
-            attr_logits.append(self.attr_logits(x))
-            speeds.append(self.speed(x))
-
-        if self.training:
-            assert gt_instances is not None
-            feature_shapes = [x.shape[-2:] for x in features]
-            training_targets = self.prepare_targets(locations, gt_instances, feature_shapes)
-            # NOTE: 
-            # if gt_dense_depth is not None:
-            #    training_targets.update({"dense_depth": gt_dense_depth})
-
-            losses = {}
-            fcos2d_loss, fcos2d_info = self.fcos2d_loss(logits, box2d_reg, centerness, training_targets)
-            losses.update(fcos2d_loss)
-
-            if not self.only_box2d:
-                fcos3d_loss = self.fcos3d_loss(
-                    box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, dense_depth, inv_intrinsics,
-                    fcos2d_info, training_targets
-                )
-                losses.update(fcos3d_loss)
-
-            # Nuscenes loss -- attribute / speed
-            nuscenes_loss = self.nuscenes_loss(attr_logits, speeds, fcos2d_info, training_targets)
-            losses.update(nuscenes_loss)
-            return losses
-        else:
-            # TODO: do not support inference now
-            raise NotImplementedError
-            pred_instances, fcos2d_info = self.fcos2d_inference(
-                logits, box2d_reg, centerness, locations, images.image_sizes
-            )
-            if not self.only_box2d:
-                # This adds 'pred_boxes3d' and 'scores_3d' to Instances in 'pred_instances'.
-                self.fcos3d_inference(
-                    box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, inv_intrinsics, pred_instances,
-                    fcos2d_info
-                )
-                score_key = "scores_3d"
+            # NOTE: directly use inv_intrinsics
+            # if 'intrinsics' in batched_inputs[0]:
+            #     intrinsics = [x['intrinsics'].to(self.device) for x in batched_inputs]
+            # else:
+            #     intrinsics = None
+            # images = ImageList.from_tensors(images, self.backbone.size_divisibility, intrinsics=intrinsics)
+            if 'inv_intrinsics' in batched_inputs[0]:
+                inv_intrinsics = [x['inv_intrinsics'].to(features[0].device) for x in batched_inputs]
+                inv_intrinsics = torch.stack(inv_intrinsics, dim=0)
             else:
-                score_key = "scores"
+                inv_intrinsics = None
 
-            # This adds 'pred_attributes', 'pred_speed' to Instances in 'pred_instances'.
-            self.nuscenes_inference(attr_logits, speeds, pred_instances, fcos2d_info)
+            # NOTE:
+            # gt_dense_depth = None
+            # if 'depth' in batched_inputs[0]:
+            #     gt_dense_depth = [x["depth"].to(self.device) for x in batched_inputs]
+            #     gt_dense_depth = ImageList.from_tensors(
+            #         gt_dense_depth, self.backbone.size_divisibility, intrinsics=intrinsics
+            #     )
 
-            # Transpose to "image-first", i.e. (B, L)
-            pred_instances = list(zip(*pred_instances))
-            pred_instances = [Instances.cat(instances) for instances in pred_instances]
+            # NOTE: directly input feature
+            # features = self.backbone(images.tensor)
+            # features = [features[f] for f in self.in_features]
 
-            # 2D NMS and pick top-K.
-            if self.do_nms:
-                pred_instances = self.fcos2d_inference.nms_and_top_k(pred_instances, score_key)
+            if "instances" in batched_inputs[0]:
+                gt_instances = [x["instances"].to(features[0].device) for x in batched_inputs]
+            else:
+                gt_instances = None
 
-            if not self.only_box2d and self.do_bev_nms:
-                # Bird-eye-view NMS.
-                dummy_group_idxs = {i: [i] for i, _ in enumerate(pred_instances)}
-                if 'pose' in batched_inputs[0]:
-                    poses = [x['pose'] for x in batched_inputs]
+            locations = self.compute_locations(features)
+            logits, box2d_reg, centerness, fcos2d_extra_output = self.fcos2d_head(features)
+            if not self.only_box2d:
+                box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, dense_depth = self.fcos3d_head(features)
+            # NOTE: directly use inv_intrinsics
+            # inv_intrinsics = images.intrinsics.inverse() if images.intrinsics is not None else None
+
+            # --------------------------------------------------------------------------
+            # NuScenes predictions -- attribute / speed, computed from cls_tower output.
+            # --------------------------------------------------------------------------
+            attr_logits, speeds = [], []
+            for x in fcos2d_extra_output['cls_tower_out']:
+                attr_logits.append(self.attr_logits(x))
+                speeds.append(self.speed(x))
+
+            if self.training:
+                assert gt_instances is not None
+                feature_shapes = [x.shape[-2:] for x in features]
+                training_targets = self.prepare_targets(locations, gt_instances, feature_shapes)
+                # NOTE: 
+                # if gt_dense_depth is not None:
+                #    training_targets.update({"dense_depth": gt_dense_depth})
+
+                losses = {}
+                fcos2d_loss, fcos2d_info = self.fcos2d_loss(logits, box2d_reg, centerness, training_targets)
+                losses.update(fcos2d_loss)
+
+                if not self.only_box2d:
+                    fcos3d_loss = self.fcos3d_loss(
+                        box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, dense_depth, inv_intrinsics,
+                        fcos2d_info, training_targets
+                    )
+                    losses.update(fcos3d_loss)
+
+                # Nuscenes loss -- attribute / speed
+                nuscenes_loss = self.nuscenes_loss(attr_logits, speeds, fcos2d_info, training_targets)
+                losses.update(nuscenes_loss)
+                return losses
+            else:
+                # TODO: do not support inference now
+                raise NotImplementedError
+                pred_instances, fcos2d_info = self.fcos2d_inference(
+                    logits, box2d_reg, centerness, locations, images.image_sizes
+                )
+                if not self.only_box2d:
+                    # This adds 'pred_boxes3d' and 'scores_3d' to Instances in 'pred_instances'.
+                    self.fcos3d_inference(
+                        box3d_quat, box3d_ctr, box3d_depth, box3d_size, box3d_conf, inv_intrinsics, pred_instances,
+                        fcos2d_info
+                    )
+                    score_key = "scores_3d"
                 else:
-                    poses = [x['extrinsics'] for x in batched_inputs]
-                pred_instances = nuscenes_sample_aggregate(
-                    pred_instances,
-                    dummy_group_idxs,
-                    self.num_classes,
-                    poses,
-                    iou_threshold=self.bev_nms_iou_thresh,
-                    include_boxes3d_global=False
-                )
+                    score_key = "scores"
 
-            if self.postprocess_in_inference:
-                processed_results = []
-                for results_per_image, input_per_image, image_size in \
-                        zip(pred_instances, batched_inputs, images.image_sizes):
-                    height = input_per_image.get("height", image_size[0])
-                    width = input_per_image.get("width", image_size[1])
-                    r = resize_instances(results_per_image, height, width)
-                    processed_results.append({"instances": r})
+                # This adds 'pred_attributes', 'pred_speed' to Instances in 'pred_instances'.
+                self.nuscenes_inference(attr_logits, speeds, pred_instances, fcos2d_info)
 
-                # ----------------------------------------------------------
-                # NuScenes specific: cross-image (i.e. sample-level) BEV NMS.
-                # ----------------------------------------------------------
-                sample_tokens = [x['sample_token'] for x in batched_inputs]
-                group_idxs = get_group_idxs(sample_tokens, self.num_images_per_sample)
+                # Transpose to "image-first", i.e. (B, L)
+                pred_instances = list(zip(*pred_instances))
+                pred_instances = [Instances.cat(instances) for instances in pred_instances]
 
-                instances = [x['instances'] for x in processed_results]
-                global_poses = [x['pose'] for x in batched_inputs]
+                # 2D NMS and pick top-K.
+                if self.do_nms:
+                    pred_instances = self.fcos2d_inference.nms_and_top_k(pred_instances, score_key)
 
-                filtered_instances = nuscenes_sample_aggregate(
-                    instances,
-                    group_idxs,
-                    self.num_classes,
-                    global_poses,
-                    self.bev_nms_iou_thresh,
-                    max_num_dets_per_sample=self.max_num_dets_per_sample
-                )
-                processed_results = [{"instances": x} for x in filtered_instances]
-            else:
-                processed_results = [{"instances": x} for x in pred_instances]
+                if not self.only_box2d and self.do_bev_nms:
+                    # Bird-eye-view NMS.
+                    dummy_group_idxs = {i: [i] for i, _ in enumerate(pred_instances)}
+                    if 'pose' in batched_inputs[0]:
+                        poses = [x['pose'] for x in batched_inputs]
+                    else:
+                        poses = [x['extrinsics'] for x in batched_inputs]
+                    pred_instances = nuscenes_sample_aggregate(
+                        pred_instances,
+                        dummy_group_idxs,
+                        self.num_classes,
+                        poses,
+                        iou_threshold=self.bev_nms_iou_thresh,
+                        include_boxes3d_global=False
+                    )
 
-            return processed_results
+                if self.postprocess_in_inference:
+                    processed_results = []
+                    for results_per_image, input_per_image, image_size in \
+                            zip(pred_instances, batched_inputs, images.image_sizes):
+                        height = input_per_image.get("height", image_size[0])
+                        width = input_per_image.get("width", image_size[1])
+                        r = resize_instances(results_per_image, height, width)
+                        processed_results.append({"instances": r})
+
+                    # ----------------------------------------------------------
+                    # NuScenes specific: cross-image (i.e. sample-level) BEV NMS.
+                    # ----------------------------------------------------------
+                    sample_tokens = [x['sample_token'] for x in batched_inputs]
+                    group_idxs = get_group_idxs(sample_tokens, self.num_images_per_sample)
+
+                    instances = [x['instances'] for x in processed_results]
+                    global_poses = [x['pose'] for x in batched_inputs]
+
+                    filtered_instances = nuscenes_sample_aggregate(
+                        instances,
+                        group_idxs,
+                        self.num_classes,
+                        global_poses,
+                        self.bev_nms_iou_thresh,
+                        max_num_dets_per_sample=self.max_num_dets_per_sample
+                    )
+                    processed_results = [{"instances": x} for x in filtered_instances]
+                else:
+                    processed_results = [{"instances": x} for x in pred_instances]
+
+                return processed_results

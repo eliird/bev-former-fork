@@ -6,12 +6,17 @@ import random
 from functools import partial
 
 import numpy as np
-from mmcv.parallel import collate
-from mmcv.runner import get_dist_info
-from mmcv.utils import Registry, build_from_cfg
+# from mmcv.parallel import collate
+from mmengine.dataset import pseudo_collate as collate
+# from mmcv.runner import get_dist_info
+from mmengine.dist import get_dist_info
+# from mmcv.utils import Registry, build_from_cfg
+from mmengine.registry import Registry, build_from_cfg
 from torch.utils.data import DataLoader
 
-from mmdet.datasets.samplers import GroupSampler
+# from mmdet.datasets.samplers import GroupSampler
+from mmengine.dataset.sampler import DefaultSampler as GroupSampler 
+
 from projects.mmdet3d_plugin.datasets.samplers.group_sampler import DistributedGroupSampler
 from projects.mmdet3d_plugin.datasets.samplers.distributed_sampler import DistributedSampler
 from projects.mmdet3d_plugin.datasets.samplers.sampler import build_sampler
@@ -104,10 +109,29 @@ def worker_init_fn(worker_id, num_workers, rank, seed):
 
 # Copyright (c) OpenMMLab. All rights reserved.
 import platform
-from mmcv.utils import Registry, build_from_cfg
+from mmengine.registry import Registry, build_from_cfg
 
-from mmdet.datasets import DATASETS
-from mmdet.datasets.builder import _concat_dataset
+# from mmdet.datasets import DATASETS
+from mmdet.registry import DATASETS
+# from mmdet.datasets.builder import _concat_dataset
+from mmdet.datasets import ConcatDataset
+
+def _concat_dataset(cfg, default_args=None):
+      """Build concatenated dataset."""
+      from copy import deepcopy
+      from mmengine.registry import build_from_cfg
+
+      ann_files = cfg.get('ann_file')
+      datasets = []
+
+      for ann_file in ann_files:
+          data_cfg = deepcopy(cfg)
+          data_cfg['ann_file'] = ann_file
+          if default_args is not None:
+              data_cfg.update(default_args)
+          datasets.append(build_from_cfg(data_cfg, DATASETS))
+
+      return ConcatDataset(datasets)
 
 if platform.system() != 'Windows':
     # https://github.com/pytorch/pytorch/issues/973

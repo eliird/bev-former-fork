@@ -1,16 +1,22 @@
 
 # Copyright (c) OpenMMLab. All rights reserved.
 import numpy as np
-from mmcv.parallel import DataContainer as DC
+# from mmcv.parallel import DataContainer as DC
 
-from mmdet3d.core.bbox import BaseInstance3DBoxes
-from mmdet3d.core.points import BasePoints
-from mmdet.datasets.builder import PIPELINES
-from mmdet.datasets.pipelines import to_tensor
-from mmdet3d.datasets.pipelines import DefaultFormatBundle3D
+# from mmdet3d.core.bbox import BaseInstance3DBoxes
+# from mmdet3d.core.points import BasePoints
+from mmdet3d.structures import BasePoints, BaseInstance3DBoxes
+# from mmdet.datasets.builder import PIPELINES
+from mmdet.registry import TRANSFORMS
+# from mmdet.datasets.pipelines import to_tensor
+from mmdet.datasets.transforms import ToTensor as to_tensor
+# from mmdet3d.datasets.pipelines import DefaultFormatBundle3D
+from mmdet3d.datasets.transforms import Pack3DDetInputs
+import torch
 
-@PIPELINES.register_module()
-class CustomDefaultFormatBundle3D(DefaultFormatBundle3D):
+
+@TRANSFORMS.register_module()
+class CustomDefaultFormatBundle3D(Pack3DDetInputs):
     """Default formatting bundle.
     It simplifies the pipeline of formatting common fields for voxels,
     including "proposals", "gt_bboxes", "gt_labels", "gt_masks" and
@@ -33,7 +39,9 @@ class CustomDefaultFormatBundle3D(DefaultFormatBundle3D):
         """
         # Format 3D data
         results = super(CustomDefaultFormatBundle3D, self).__call__(results)
-        results['gt_map_masks'] = DC(
-            to_tensor(results['gt_map_masks']), stack=True)
+        results['gt_map_masks'] = to_tensor(results['gt_map_masks'])
+        if isinstance(gt_map_masks, list):
+            gt_map_masks = torch.stack(gt_map_masks)
+            results['gt_map_masks'] = gt_map_masks
 
         return results

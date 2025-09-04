@@ -3,28 +3,48 @@ from re import I
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import Linear, bias_init_with_prob
-from mmcv.utils import TORCH_VERSION, digit_version
+# from mmcv.cnn import Linear, bias_init_with_prob
+# from mmcv.utils import TORCH_VERSION, digit_version
 
-from mmdet.core import (multi_apply, multi_apply, reduce_mean)
-from mmdet.models.utils.transformer import inverse_sigmoid
-from mmdet.models import HEADS
+# from mmdet.core import (multi_apply, multi_apply, reduce_mean)
+from mmdet.models.utils import multi_apply
+from mmdet.utils import reduce_mean
+# from mmdet.models.utils.transformer import inverse_sigmoid
+from mmdet.models.layers import inverse_sigmoid
+
+# from mmdet.models import HEADS
+from mmdet.registry import MODELS
+
 from mmdet.models.dense_heads import DETRHead
-from mmdet3d.core.bbox.coders import build_bbox_coder
+# from mmdet3d.core.bbox.coders import build_bbox_coder
+
 from traitlets import import_item
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
 from mmcv.cnn.bricks.transformer import build_positional_encoding
-from mmcv.runner import BaseModule, force_fp32
+# from mmcv.runner import BaseModule, force_fp32
+from mmengine.runner.amp import autocast
 from projects.mmdet3d_plugin.models.utils.bricks import run_time
 import numpy as np
 import mmcv
 import cv2 as cv
 from projects.mmdet3d_plugin.bevformer.modules import PerceptionTransformerBEVEncoder
-from mmdet.models.utils import build_transformer
-from mmdet3d.models.builder import build_head
 from mmdet3d.models.dense_heads.free_anchor3d_head import FreeAnchor3DHead
 
-@HEADS.register_module()
+# from mmdet.models.utils import build_transformer
+# from mmdet3d.models.builder import build_head
+from mmengine.registry import build_from_cfg
+from mmdet.registry import MODELS
+
+
+def build_transformer(cfg):
+    """Build transformer from config."""
+    return build_from_cfg(cfg, MODELS)
+
+def build_head(cfg):
+    """Build head from config."""
+    return build_from_cfg(cfg, MODELS)
+
+@MODELS.register_module()
 class BEVHead(BaseModule):
     def __init__(self, 
                  bev_h,
@@ -61,56 +81,59 @@ class BEVHead(BaseModule):
         
         self.bev_embedding = nn.Embedding(self.bev_h * self.bev_w, self.embed_dims)
 
-    @force_fp32(apply_to=('mlvl_feats', 'pred_bev'))
+    # @force_fp32(apply_to=('mlvl_feats', 'pred_bev'))
     def forward(self, mlvl_feats, img_metas, prev_bev=None,  only_bev=False):
-        bs, num_cam, _, _, _ = mlvl_feats[0].shape
-        dtype = mlvl_feats[0].dtype
-        bev_queries = self.bev_embedding.weight.to(dtype)
+        with autocast(enabled=True, dtype=torch.float32):
+            bs, num_cam, _, _, _ = mlvl_feats[0].shape
+            dtype = mlvl_feats[0].dtype
+            bev_queries = self.bev_embedding.weight.to(dtype)
 
-        bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
-                               device=bev_queries.device).to(dtype)
-        bev_pos = self.positional_encoding(bev_mask).to(dtype)
+            bev_mask = torch.zeros((bs, self.bev_h, self.bev_w),
+                                device=bev_queries.device).to(dtype)
+            bev_pos = self.positional_encoding(bev_mask).to(dtype)
 
-        bev_embed = self.transformer(
-                mlvl_feats,
-                bev_queries,
-                self.bev_h,
-                self.bev_w,
-                grid_length=(self.real_h / self.bev_h,
-                             self.real_w / self.bev_w),
-                bev_pos=bev_pos,
-                img_metas=img_metas,
-                prev_bev=prev_bev,
-            )
+            bev_embed = self.transformer(
+                    mlvl_feats,
+                    bev_queries,
+                    self.bev_h,
+                    self.bev_w,
+                    grid_length=(self.real_h / self.bev_h,
+                                self.real_w / self.bev_w),
+                    bev_pos=bev_pos,
+                    img_metas=img_metas,
+                    prev_bev=prev_bev,
+                )
 
-        if only_bev:
-            return bev_embed
-        
-        bev_feature = bev_embed.permute(0, 2, 1).reshape(bs, self.embed_dims, self.bev_h, self.bev_w)
-        ret = {}
-        ret['pred'] = self.pts_bbox_head_3d([bev_feature,])
-        if not self.training:
-            ret['bev_embed'] = bev_embed
-        return ret 
+            if only_bev:
+                return bev_embed
+            
+            bev_feature = bev_embed.permute(0, 2, 1).reshape(bs, self.embed_dims, self.bev_h, self.bev_w)
+            ret = {}
+            ret['pred'] = self.pts_bbox_head_3d([bev_feature,])
+            if not self.training:
+                ret['bev_embed'] = bev_embed
+            return ret 
     
 
-    @force_fp32(apply_to=('ret'))
+    # @force_fp32(apply_to=('ret'))
     def loss(self,
              gt_bboxes_list,
              gt_labels_list,
              ret,
              gt_bboxes_ignore=None,
              img_metas=None):
-        assert gt_bboxes_ignore is None
-        return self.pts_bbox_head_3d.loss(gt_bboxes_list, gt_labels_list, ret['pred'], gt_bboxes_ignore=gt_bboxes_ignore, img_metas=img_metas)
+        with autocast(enabled=True, dtype=torch.float32):
+            assert gt_bboxes_ignore is None
+            return self.pts_bbox_head_3d.loss(gt_bboxes_list, gt_labels_list, ret['pred'], gt_bboxes_ignore=gt_bboxes_ignore, img_metas=img_metas)
     
-    @force_fp32(apply_to=('ret'))
+    # @force_fp32(apply_to=('ret'))
     def get_bboxes(self, ret, img_metas, rescale=False):
-        return self.pts_bbox_head_3d.get_bboxes(ret['pred'], img_metas)
+        with autocast(enabled=True, dtype=torch.float32):
+            return self.pts_bbox_head_3d.get_bboxes(ret['pred'], img_metas)
 
-@HEADS.register_module()
+@MODELS.register_module()
 class FreeAnchor3DHeadV2(FreeAnchor3DHead):
-    @force_fp32(apply_to=('pred'))
+    # @force_fp32(apply_to=('pred'))
     def loss(self,
              gt_bboxes_list,
              gt_labels_list,
@@ -118,15 +141,16 @@ class FreeAnchor3DHeadV2(FreeAnchor3DHead):
              gt_bboxes_ignore=None,
              img_metas=None):
             cls_scores, bbox_preds, dir_cls_preds = pred
-            
-            return super().loss(cls_scores, bbox_preds, dir_cls_preds, gt_bboxes_list, gt_labels_list, img_metas, gt_bboxes_ignore)
-    @force_fp32(apply_to=('pred'))
+            with autocast(enabled=True, dtype=torch.float32):
+                return super().loss(cls_scores, bbox_preds, dir_cls_preds, gt_bboxes_list, gt_labels_list, img_metas, gt_bboxes_ignore)
+    # @force_fp32(apply_to=('pred'))
     def get_bboxes(self, pred, img_metas, rescale=False):
-        cls_scores, bbox_preds, dir_cls_preds = pred
-        return super().get_bboxes(
-                   cls_scores,
-                   bbox_preds,
-                   dir_cls_preds,
-                   img_metas,
-                   cfg=None,
-                   rescale=rescale)
+        with autocast(enabled=True, dtype=torch.float32):
+            cls_scores, bbox_preds, dir_cls_preds = pred
+            return super().get_bboxes(
+                    cls_scores,
+                    bbox_preds,
+                    dir_cls_preds,
+                    img_metas,
+                    cfg=None,
+                    rescale=rescale)

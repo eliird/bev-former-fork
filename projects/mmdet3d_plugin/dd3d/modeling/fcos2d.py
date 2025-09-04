@@ -9,7 +9,8 @@ from torch.nn import functional as F
 from detectron2.layers import Conv2d, batched_nms, cat, get_norm
 from detectron2.structures import Boxes, Instances
 from detectron2.utils.comm import get_world_size
-from mmcv.runner import force_fp32
+# from mmcv.runner import force_fp32
+from mmengine.runner.amp import autocast
 
 from projects.mmdet3d_plugin.dd3d.layers.iou_loss import IOULoss
 from projects.mmdet3d_plugin.dd3d.layers.normalization import ModuleListDial, Scale
@@ -178,80 +179,81 @@ class FCOS2DLoss(nn.Module):
 
         self.num_classes = num_classes
 
-    @force_fp32(apply_to=('logits', 'box2d_reg', 'centerness'))
+    # @force_fp32(apply_to=('logits', 'box2d_reg', 'centerness'))
     def forward(self, logits, box2d_reg, centerness, targets):
-        labels = targets['labels']
-        box2d_reg_targets = targets['box2d_reg_targets']
-        pos_inds = targets["pos_inds"]
+        with autocast(enabled=True, dtype=torch.float32):
+            labels = targets['labels']
+            box2d_reg_targets = targets['box2d_reg_targets']
+            pos_inds = targets["pos_inds"]
 
-        if len(labels) != box2d_reg_targets.shape[0]:
-            raise ValueError(
-                f"The size of 'labels' and 'box2d_reg_targets' does not match: a={len(labels)}, b={box2d_reg_targets.shape[0]}"
-            )
+            if len(labels) != box2d_reg_targets.shape[0]:
+                raise ValueError(
+                    f"The size of 'labels' and 'box2d_reg_targets' does not match: a={len(labels)}, b={box2d_reg_targets.shape[0]}"
+                )
 
-        # Flatten predictions
-        logits = cat([x.permute(0, 2, 3, 1).reshape(-1, self.num_classes) for x in logits])
-        box2d_reg_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 4) for x in box2d_reg])
-        centerness_pred = cat([x.permute(0, 2, 3, 1).reshape(-1) for x in centerness])
+            # Flatten predictions
+            logits = cat([x.permute(0, 2, 3, 1).reshape(-1, self.num_classes) for x in logits])
+            box2d_reg_pred = cat([x.permute(0, 2, 3, 1).reshape(-1, 4) for x in box2d_reg])
+            centerness_pred = cat([x.permute(0, 2, 3, 1).reshape(-1) for x in centerness])
 
-        # -------------------
-        # Classification loss
-        # -------------------
-        num_pos_local = pos_inds.numel()
-        num_gpus = get_world_size()
-        total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local])).item()
-        num_pos_avg = max(total_num_pos / num_gpus, 1.0)
+            # -------------------
+            # Classification loss
+            # -------------------
+            num_pos_local = pos_inds.numel()
+            num_gpus = get_world_size()
+            total_num_pos = reduce_sum(pos_inds.new_tensor([num_pos_local])).item()
+            num_pos_avg = max(total_num_pos / num_gpus, 1.0)
 
-        # prepare one_hot
-        cls_target = torch.zeros_like(logits)
-        cls_target[pos_inds, labels[pos_inds]] = 1
+            # prepare one_hot
+            cls_target = torch.zeros_like(logits)
+            cls_target[pos_inds, labels[pos_inds]] = 1
 
-        loss_cls = sigmoid_focal_loss(
-            logits,
-            cls_target,
-            alpha=self.focal_loss_alpha,
-            gamma=self.focal_loss_gamma,
-            reduction="sum",
-        ) / num_pos_avg
+            loss_cls = sigmoid_focal_loss(
+                logits,
+                cls_target,
+                alpha=self.focal_loss_alpha,
+                gamma=self.focal_loss_gamma,
+                reduction="sum",
+            ) / num_pos_avg
 
-        # NOTE: The rest of losses only consider foreground pixels.
-        box2d_reg_pred = box2d_reg_pred[pos_inds]
-        box2d_reg_targets = box2d_reg_targets[pos_inds]
+            # NOTE: The rest of losses only consider foreground pixels.
+            box2d_reg_pred = box2d_reg_pred[pos_inds]
+            box2d_reg_targets = box2d_reg_targets[pos_inds]
 
-        centerness_pred = centerness_pred[pos_inds]
+            centerness_pred = centerness_pred[pos_inds]
 
-        # Compute centerness targets here using 2D regression targets of foreground pixels.
-        centerness_targets = compute_ctrness_targets(box2d_reg_targets)
+            # Compute centerness targets here using 2D regression targets of foreground pixels.
+            centerness_targets = compute_ctrness_targets(box2d_reg_targets)
 
-        # Denominator for all foreground losses.
-        ctrness_targets_sum = centerness_targets.sum()
-        loss_denom = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
+            # Denominator for all foreground losses.
+            ctrness_targets_sum = centerness_targets.sum()
+            loss_denom = max(reduce_sum(ctrness_targets_sum).item() / num_gpus, 1e-6)
 
-        # NOTE: change the return after reduce_sum
-        if pos_inds.numel() == 0:
-            losses = {
-                "loss_cls": loss_cls,
-                "loss_box2d_reg": box2d_reg_pred.sum() * 0.,
-                "loss_centerness": centerness_pred.sum() * 0.,
-            }
-            return losses, {}
+            # NOTE: change the return after reduce_sum
+            if pos_inds.numel() == 0:
+                losses = {
+                    "loss_cls": loss_cls,
+                    "loss_box2d_reg": box2d_reg_pred.sum() * 0.,
+                    "loss_centerness": centerness_pred.sum() * 0.,
+                }
+                return losses, {}
 
-        # ----------------------
-        # 2D box regression loss
-        # ----------------------
-        loss_box2d_reg = self.box2d_reg_loss_fn(box2d_reg_pred, box2d_reg_targets, centerness_targets) / loss_denom
+            # ----------------------
+            # 2D box regression loss
+            # ----------------------
+            loss_box2d_reg = self.box2d_reg_loss_fn(box2d_reg_pred, box2d_reg_targets, centerness_targets) / loss_denom
 
-        # ---------------
-        # Centerness loss
-        # ---------------
-        loss_centerness = F.binary_cross_entropy_with_logits(
-            centerness_pred, centerness_targets, reduction="sum"
-        ) / num_pos_avg
+            # ---------------
+            # Centerness loss
+            # ---------------
+            loss_centerness = F.binary_cross_entropy_with_logits(
+                centerness_pred, centerness_targets, reduction="sum"
+            ) / num_pos_avg
 
-        loss_dict = {"loss_cls": loss_cls, "loss_box2d_reg": loss_box2d_reg, "loss_centerness": loss_centerness}
-        extra_info = {"loss_denom": loss_denom, "centerness_targets": centerness_targets}
+            loss_dict = {"loss_cls": loss_cls, "loss_box2d_reg": loss_box2d_reg, "loss_centerness": loss_centerness}
+            extra_info = {"loss_denom": loss_denom, "centerness_targets": centerness_targets}
 
-        return loss_dict, extra_info
+            return loss_dict, extra_info
 
 
 class FCOS2DInference():
