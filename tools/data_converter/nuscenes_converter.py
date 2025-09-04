@@ -13,8 +13,10 @@ from os import path as osp
 from pyquaternion import Quaternion
 from shapely.geometry import MultiPoint, box
 from typing import List, Tuple, Union
+from mmengine.utils import track_iter_progress
 
-from mmdet3d.core.bbox.box_np_ops import points_cam2img
+# from mmdet3d.core.bbox.box_np_ops import points_cam2img
+from mmdet3d.datasets.convert_utils import points_cam2img
 from mmdet3d.datasets import NuScenesDataset
 
 nus_categories = ('car', 'truck', 'trailer', 'bus', 'construction_vehicle',
@@ -139,7 +141,7 @@ def get_available_scenes(nusc):
                 # path from lyftdataset is absolute path
                 lidar_path = lidar_path.split(f'{os.getcwd()}/')[-1]
                 # relative path
-            if not mmcv.is_filepath(lidar_path):
+            if osp.exists(lidar_path):
                 scene_not_exist = True
                 break
             else:
@@ -199,7 +201,7 @@ def _fill_trainval_infos(nusc,
     train_nusc_infos = []
     val_nusc_infos = []
     frame_idx = 0
-    for sample in mmcv.track_iter_progress(nusc.sample):
+    for sample in track_iter_progress(nusc.sample):
         lidar_token = sample['data']['LIDAR_TOP']
         sd_rec = nusc.get('sample_data', sample['data']['LIDAR_TOP'])
         cs_record = nusc.get('calibrated_sensor',
@@ -207,7 +209,7 @@ def _fill_trainval_infos(nusc,
         pose_record = nusc.get('ego_pose', sd_rec['ego_pose_token'])
         lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
 
-        mmcv.check_file_exist(lidar_path)
+        assert osp.exists(lidar_path)
         can_bus = _get_can_bus_info(nusc, nusc_can_bus, sample)
         ##
         info = {
@@ -293,8 +295,9 @@ def _fill_trainval_infos(nusc,
 
             names = [b.name for b in boxes]
             for i in range(len(names)):
-                if names[i] in NuScenesDataset.NameMapping:
-                    names[i] = NuScenesDataset.NameMapping[names[i]]
+                # if names[i] in NuScenesDataset.NameMapping:
+                if names[i] in NuScenesDataset.METAINFO['classes']:
+                    names[i] = NuScenesDataset.METAINFO[names[i]]
             names = np.array(names)
             # we need to convert rot to SECOND format.
             gt_boxes = np.concatenate([locs, dims, -rots - np.pi / 2], axis=1)
