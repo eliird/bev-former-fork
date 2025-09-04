@@ -1,19 +1,22 @@
 import torch
 
-from mmdet.core.bbox.builder import BBOX_ASSIGNERS
-from mmdet.core.bbox.assigners import AssignResult
-from mmdet.core.bbox.assigners import BaseAssigner
-from mmdet.core.bbox.match_costs import build_match_cost
-from mmdet.models.utils.transformer import inverse_sigmoid
+# from mmdet.core.bbox.builder import BBOX_ASSIGNERS
+from mmdet.registry import TASK_UTILS
+# from mmdet.core.bbox.assigners import AssignResult
+# from mmdet.core.bbox.assigners import BaseAssigner
+from mmdet.models.task_modules.assigners import BaseAssigner, AssignResult
+# from mmdet.core.bbox.match_costs import build_match_cost
+# will use registry for it instead
+from mmdet.models.layers import inverse_sigmoid
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
-
+from mmengine.registry import build_from_cfg
 try:
     from scipy.optimize import linear_sum_assignment
 except ImportError:
     linear_sum_assignment = None
 
 
-@BBOX_ASSIGNERS.register_module()
+@TASK_UTILS.register_module()
 class HungarianAssigner3D(BaseAssigner):
     """Computes one-to-one matching between predictions and ground truth.
     This class computes an assignment between the targets and the predictions
@@ -44,9 +47,13 @@ class HungarianAssigner3D(BaseAssigner):
                  reg_cost=dict(type='BBoxL1Cost', weight=1.0),
                  iou_cost=dict(type='IoUCost', weight=0.0),
                  pc_range=None):
-        self.cls_cost = build_match_cost(cls_cost)
-        self.reg_cost = build_match_cost(reg_cost)
-        self.iou_cost = build_match_cost(iou_cost)
+        # self.cls_cost = build_match_cost(cls_cost)
+        # self.reg_cost = build_match_cost(reg_cost)
+        # self.iou_cost = build_match_cost(iou_cost)
+
+        self.cls_cost = build_from_cfg(cls_cost, TASK_UTILS)        
+        self.reg_cost = build_from_cfg(reg_cost, TASK_UTILS)
+        self.iou_cost = build_from_cfg(iou_cost, TASK_UTILS)
         self.pc_range = pc_range
 
     def assign(self,
