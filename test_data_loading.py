@@ -126,11 +126,96 @@ def test_data_loading_pipeline():
         else:
             dataset_cfg = cfg.data.train
             
-        dataset_cfg.ann_file = ann_file
         dataset_cfg.data_root = 'data/nuscenes/'
+        dataset_cfg.ann_file = 'nuscenes_infos_temporal_train.pkl'  # Relative to data_root
+        # Register mmdet3d transforms into mmengine registry (which is what datasets actually use)
+        from mmdet.registry import DATASETS
+        from mmengine.registry import TRANSFORMS
+        from projects.mmdet3d_plugin.datasets.pipelines import (
+            PhotoMetricDistortionMultiViewImage, 
+            NormalizeMultiviewImage,
+            RandomScaleImageMultiViewImage, 
+            PadMultiViewImage
+        )
+        from projects.mmdet3d_plugin.datasets.pipelines.formating import (
+            CustomDefaultFormatBundle3D, DefaultFormatBundle3D
+        )
         
-        # Try to build dataset
-        from mmdet3d.registry import DATASETS
+        # Register the custom transforms directly
+        TRANSFORMS.register_module(name='PhotoMetricDistortionMultiViewImage', module=PhotoMetricDistortionMultiViewImage, force=True)
+        TRANSFORMS.register_module(name='NormalizeMultiviewImage', module=NormalizeMultiviewImage, force=True)
+        TRANSFORMS.register_module(name='RandomScaleImageMultiViewImage', module=RandomScaleImageMultiViewImage, force=True)
+        TRANSFORMS.register_module(name='PadMultiViewImage', module=PadMultiViewImage, force=True)
+        TRANSFORMS.register_module(name='CustomCollect3D', module=CustomCollect3D, force=True)
+        TRANSFORMS.register_module(name='DefaultFormatBundle3D', module=DefaultFormatBundle3D, force=True)
+        TRANSFORMS.register_module(name='CustomDefaultFormatBundle3D', module=CustomDefaultFormatBundle3D, force=True)
+        # List of transforms we need from mmdet3d
+        mmdet3d_transforms = [
+            'LoadMultiViewImageFromFiles',
+            'LoadAnnotations3D', 
+            'ObjectRangeFilter',
+            'ObjectNameFilter'
+        ]
+        
+        # List of custom transforms from the plugin (these should already be registered via import)
+        plugin_transforms = [
+            'PhotoMetricDistortionMultiViewImage',
+            'NormalizeMultiviewImage', 
+            'RandomScaleImageMultiViewImage',
+            'PadMultiViewImage',
+            'DefaultFormatBundle3D',
+            'CustomCollect3D'
+        ]
+        
+        # from mmdet3d.datasets.transforms import PhotoMetricDistortion3D
+        # from mmdet.datasets.transforms import PhotoMetricDistortion
+        print("Registering mmdet3d transforms into mmengine registry...")
+        registered_count = 0
+        
+        # Register mmdet3d transforms
+        for transform_name in mmdet3d_transforms:
+            try:
+                # First try direct import from mmdet3d.datasets.transforms
+                from mmdet3d.datasets import transforms as mmdet3d_transforms_module
+                if hasattr(mmdet3d_transforms_module, transform_name):
+                    transform_class = getattr(mmdet3d_transforms_module, transform_name)
+                    TRANSFORMS.register_module(name=transform_name, module=transform_class, force=True)
+                    print(f"✓ Registered {transform_name}")
+                    registered_count += 1
+                else:
+                    # Try getting from mmdet3d registry
+                    from mmdet3d.registry import TRANSFORMS as TRANSFORMS_3D
+                    if transform_name in TRANSFORMS_3D.module_dict:
+                        transform_class = TRANSFORMS_3D.get(transform_name)
+                        TRANSFORMS.register_module(name=transform_name, module=transform_class, force=True)
+                        print(f"✓ Registered {transform_name} from mmdet3d registry")
+                        registered_count += 1
+                    else:
+                        print(f"⚠ {transform_name} not found in mmdet3d")
+            except Exception as e:
+                print(f"⚠ Failed to register {transform_name}: {e}")
+        
+        print(f"Successfully registered {registered_count}/{len(mmdet3d_transforms)} mmdet3d transforms")
+        
+        # Register plugin transforms into mmengine registry 
+        print("Registering plugin transforms into mmengine registry...")
+        plugin_registered = 0
+        
+        from mmdet.registry import TRANSFORMS as MMDET_TRANSFORMS
+        for transform_name in plugin_transforms:
+            try:
+                if transform_name in MMDET_TRANSFORMS.module_dict:
+                    transform_class = MMDET_TRANSFORMS.get(transform_name)
+                    TRANSFORMS.register_module(name=transform_name, module=transform_class, force=True)
+                    print(f"✓ Registered {transform_name} from plugin")
+                    plugin_registered += 1
+                else:
+                    print(f"⚠ {transform_name} not found in plugin registry")
+            except Exception as e:
+                print(f"⚠ Failed to register {transform_name}: {e}")
+                
+        print(f"Successfully registered {plugin_registered}/{len(plugin_transforms)} plugin transforms")
+        # print(dataset_cfg)
         dataset = build_from_cfg(dataset_cfg, DATASETS)
         print(f"✓ Dataset built successfully")
         print(f"  - Dataset length: {len(dataset)}")

@@ -183,7 +183,8 @@ train_pipeline = [
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
     dict(type='PadMultiViewImage', size_divisor=32),
-    dict(type='DefaultFormatBundle3D', class_names=class_names),
+    # dict(type='DefaultFormatBundle3D', class_names=class_names),  # Old API
+    dict(type='DefaultFormatBundle3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img']),  # Using Pack3DDetInputs with DefaultFormatBundle3D name
     dict(type='CustomCollect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'])
 ]
 
@@ -199,10 +200,14 @@ test_pipeline = [
         transforms=[
             dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
             dict(type='PadMultiViewImage', size_divisor=32),
+            # dict(
+            #     type='DefaultFormatBundle3D',
+            #     class_names=class_names,
+            #     with_label=False),  # Old API
             dict(
                 type='DefaultFormatBundle3D',
-                class_names=class_names,
-                with_label=False),
+                keys=['img'],
+                meta_keys=['img_shape', 'ori_shape', 'pad_shape', 'lidar2img', 'intrinsics', 'extrinsics']),  # Using Pack3DDetInputs with DefaultFormatBundle3D name
             dict(type='CustomCollect3D', keys=['img'])
         ])
 ]

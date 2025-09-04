@@ -11,12 +11,12 @@ from mmdet.registry import TRANSFORMS
 # from mmdet.datasets.pipelines import to_tensor
 from mmdet.datasets.transforms import ToTensor as to_tensor
 # from mmdet3d.datasets.pipelines import DefaultFormatBundle3D
-from mmdet3d.datasets.transforms import Pack3DDetInputs
+from mmdet3d.datasets.transforms import Pack3DDetInputs as DefaultFormatBundle3D
 import torch
 
 
 @TRANSFORMS.register_module()
-class CustomDefaultFormatBundle3D(Pack3DDetInputs):
+class CustomDefaultFormatBundle3D(DefaultFormatBundle3D):
     """Default formatting bundle.
     It simplifies the pipeline of formatting common fields for voxels,
     including "proposals", "gt_bboxes", "gt_labels", "gt_masks" and
