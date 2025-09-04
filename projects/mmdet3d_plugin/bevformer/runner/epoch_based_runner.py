@@ -6,17 +6,20 @@
 import os.path as osp
 import torch
 import mmcv
-from mmcv.runner.base_runner import BaseRunner
-from mmcv.runner.epoch_based_runner import EpochBasedRunner
-from mmcv.runner.builder import RUNNERS
-from mmcv.runner.checkpoint import save_checkpoint
-from mmcv.runner.utils import get_host_info
-from pprint import pprint
-from mmcv.parallel.data_container import DataContainer
+# from mmcv.runner.base_runner import BaseRunner
+# from mmcv.runner.epoch_based_runner import EpochBasedRunner
+from mmengine.runner import Runner
+# from mmcv.runner.builder import RUNNERS
+from mmengine.registry import RUNNERS
+# from mmcv.runner.checkpoint import save_checkpoint
+from mmengine.runner.checkpoint import save_checkpoint
+# from mmcv.runner.utils import get_host_info
+# from mmcv.parallel.data_container import DataContainer
 
+from pprint import pprint
 
 @RUNNERS.register_module()
-class EpochBasedRunner_video(EpochBasedRunner):
+class EpochBasedRunner_video(Runner):
     
     ''' 
     # basic logic
@@ -70,20 +73,31 @@ class EpochBasedRunner_video(EpochBasedRunner):
                     if key not in ['img_metas', 'img', 'points']:
                         data[key] = data_batch[key]
                     else:
+                        # if key == 'img':
+                        #     data['img'] = DataContainer(data=[data_batch['img'].data[0][:, i]], cpu_only=data_batch['img'].cpu_only, stack=True)
+                        # elif key == 'img_metas':
+                        #     data['img_metas'] = DataContainer(data=[[each[i] for each in data_batch['img_metas'].data[0]]], cpu_only=data_batch['img_metas'].cpu_only)
+                        # else:
+                        #     assert False
                         if key == 'img':
-                            data['img'] = DataContainer(data=[data_batch['img'].data[0][:, i]], cpu_only=data_batch['img'].cpu_only, stack=True)
+                            # If data needs to be stacked (multiple images), use torch.stack
+                            img_data = data_batch['img'][0][:, i]
+                            if isinstance(img_data, list):
+                                data['img'] = torch.stack([img_data])
+                            else:
+                                data['img'] = [img_data]
                         elif key == 'img_metas':
-                            data['img_metas'] = DataContainer(data=[[each[i] for each in data_batch['img_metas'].data[0]]], cpu_only=data_batch['img_metas'].cpu_only)
+                            data['img_metas'] = [[each[i] for each in data_batch['img_metas'][0]]]
                         else:
                             assert False
                 data_list.append(data)
             with torch.no_grad():
                 for i in range(num_samples-1):
                     if data_list[i]['img_metas'].data[0][0]['prev_bev_exists']:
-                        data_list[i]['prev_bev'] = DataContainer(data=[prev_bev], cpu_only=False)
+                        data_list[i]['prev_bev'] = [prev_bev] # DataContainer(data=[prev_bev], cpu_only=False)
                     prev_bev = self.eval_model.val_step(data_list[i], self.optimizer, **kwargs)
             if data_list[-1]['img_metas'].data[0][0]['prev_bev_exists']:
-                data_list[-1]['prev_bev'] = DataContainer(data=[prev_bev], cpu_only=False)
+                data_list[-1]['prev_bev'] = [prev_bev] # DataContainer(data=[prev_bev], cpu_only=False)
             outputs = self.model.train_step(data_list[-1], self.optimizer, **kwargs)
         else:
             assert False
