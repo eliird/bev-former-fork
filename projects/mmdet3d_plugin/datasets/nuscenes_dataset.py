@@ -1,12 +1,16 @@
 import copy
+from typing import Callable, List
 
 import numpy as np
 # from mmdet.datasets import DATASETS
 from mmdet.registry import DATASETS
-from mmdet3d.datasets import NuScenesDataset
+from mmdet3d.datasets import NuScenesDataset, Det3DDataset
+from mmdet3d.structures.bbox_3d.cam_box3d import CameraInstance3DBoxes
+from mmdet3d.structures import LiDARInstance3DBoxes
 import mmcv
 from os import path as osp
 # from mmdet.datasets import DATASETS
+from pyparsing import Union
 import torch
 import numpy as np
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
@@ -15,20 +19,258 @@ from projects.mmdet3d_plugin.models.utils.visual import save_tensor
 # from mmcv.parallel import DataContainer as DC
 import random
 
-
 @DATASETS.register_module()
-class CustomNuScenesDataset(NuScenesDataset):
+class CustomNuScenesDataset(Det3DDataset):
     r"""NuScenes Dataset.
+    
+    This class serves as the API for experiments on the NuScenes Dataset.
 
+    Please refer to `NuScenes Dataset <https://www.nuscenes.org/download>`_
+    for data downloading.
+
+    Args:
+        data_root (str): Path of dataset root.
+        ann_file (str): Path of annotation file.
+        pipeline (list[dict]): Pipeline used for data processing.
+            Defaults to [].
+        box_type_3d (str): Type of 3D box of this dataset.
+            Based on the `box_type_3d`, the dataset will encapsulate the box
+            to its original format then converted them to `box_type_3d`.
+            Defaults to 'LiDAR' in this dataset. Available options includes:
+
+            - 'LiDAR': Box in LiDAR coordinates.
+            - 'Depth': Box in depth coordinates, usually for indoor dataset.
+            - 'Camera': Box in camera coordinates.
+        load_type (str): Type of loading mode. Defaults to 'frame_based'.
+
+            - 'frame_based': Load all of the instances in the frame.
+            - 'mv_image_based': Load all of the instances in the frame and need
+                to convert to the FOV-based data type to support image-based
+                detector.
+            - 'fov_image_based': Only load the instances inside the default
+                cam, and need to convert to the FOV-based data type to support
+                image-based detector.
+        modality (dict): Modality to specify the sensor data used as input.
+            Defaults to dict(use_camera=False, use_lidar=True).
+        filter_empty_gt (bool): Whether to filter the data with empty GT.
+            If it's set to be True, the example with empty annotations after
+            data pipeline will be dropped and a random example will be chosen
+            in `__getitem__`. Defaults to True.
+        test_mode (bool): Whether the dataset is in test mode.
+            Defaults to False.
+        with_velocity (bool): Whether to include velocity prediction
+            into the experiments. Defaults to True.
+        use_valid_flag (bool): Whether to use `use_valid_flag` key
+            in the info file as mask to filter gt_boxes and gt_names.
+            Defaults to False.
+    
     This datset only add camera intrinsics and extrinsics to the results.
     """
+    METAINFO = {
+        'classes':
+        ('car', 'truck', 'trailer', 'bus', 'construction_vehicle', 'bicycle',
+         'motorcycle', 'pedestrian', 'traffic_cone', 'barrier'),
+        'version':
+        'v1.0-trainval',
+        'palette': [
+            (255, 158, 0),  # Orange
+            (255, 99, 71),  # Tomato
+            (255, 140, 0),  # Darkorange
+            (255, 127, 80),  # Coral
+            (233, 150, 70),  # Darksalmon
+            (220, 20, 60),  # Crimson
+            (255, 61, 99),  # Red
+            (0, 0, 230),  # Blue
+            (47, 79, 79),  # Darkslategrey
+            (112, 128, 144),  # Slategrey
+        ]
+    }
+    
+    def __init__(self, 
+                 data_root: str,
+                 ann_file: str,
+                 pipeline: List[Union[dict, Callable]] = [],
+                 box_type_3d: str = 'LiDAR',
+                 load_type: str = 'mv_image_based',
+                 queue_length=4, 
+                 bev_size=(200, 200), 
+                 overlap_test=False,
+                 modality: dict = dict(
+                     use_camera=False,
+                     use_lidar=True,
+                 ),
+                 filter_empty_gt: bool = True,
+                 test_mode: bool = False,
+                 with_velocity: bool = True,
+                 use_valid_flag: bool = False,
+                **kwargs):
+        # super().__init__(*args, **kwargs)
+        self.use_valid_flag = use_valid_flag
+        self.with_velocity = with_velocity
+        # TODO: Redesign multi-view data process in the future
+        assert load_type in ('frame_based', 'mv_image_based',
+                             'fov_image_based')
+        self.load_type = load_type
 
-    def __init__(self, queue_length=4, bev_size=(200, 200), overlap_test=False, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        assert box_type_3d.lower() in ('lidar', 'camera')
+        
         self.queue_length = queue_length
         self.overlap_test = overlap_test
         self.bev_size = bev_size
         
+        super().__init__(
+            data_root=data_root,
+            ann_file=ann_file,
+            modality=modality,
+            pipeline=pipeline,
+            box_type_3d=box_type_3d,
+            filter_empty_gt=filter_empty_gt,
+            test_mode=test_mode,
+            **kwargs)
+    
+    # added from original
+    def _filter_with_mask(self, ann_info: dict) -> dict:
+        """Remove annotations that do not need to be cared.
+
+        Args:
+            ann_info (dict): Dict of annotation infos.
+
+        Returns:
+            dict: Annotations after filtering.
+        """
+        filtered_annotations = {}
+        if self.use_valid_flag:
+            filter_mask = ann_info['bbox_3d_isvalid']
+        else:
+            filter_mask = ann_info['num_lidar_pts'] > 0
+        for key in ann_info.keys():
+            if key != 'instances':
+                filtered_annotations[key] = (ann_info[key][filter_mask])
+            else:
+                filtered_annotations[key] = ann_info[key]
+        return filtered_annotations
+    
+    # added from origina    
+    def parse_ann_info(self, info: dict) -> dict:
+        """Process the `instances` in data info to `ann_info`.
+
+        Args:
+            info (dict): Data information of single data sample.
+
+        Returns:
+            dict: Annotation information consists of the following keys:
+
+                - gt_bboxes_3d (:obj:`LiDARInstance3DBoxes`):
+                  3D ground truth bboxes.
+                - gt_labels_3d (np.ndarray): Labels of ground truths.
+        """
+        ann_info = super().parse_ann_info(info)
+        if ann_info is not None:
+
+            ann_info = self._filter_with_mask(ann_info)
+
+            if self.with_velocity:
+                gt_bboxes_3d = ann_info['gt_bboxes_3d']
+                gt_velocities = ann_info['velocities']
+                nan_mask = np.isnan(gt_velocities[:, 0])
+                gt_velocities[nan_mask] = [0.0, 0.0]
+                gt_bboxes_3d = np.concatenate([gt_bboxes_3d, gt_velocities],
+                                              axis=-1)
+                ann_info['gt_bboxes_3d'] = gt_bboxes_3d
+        else:
+            # empty instance
+            ann_info = dict()
+            if self.with_velocity:
+                ann_info['gt_bboxes_3d'] = np.zeros((0, 9), dtype=np.float32)
+            else:
+                ann_info['gt_bboxes_3d'] = np.zeros((0, 7), dtype=np.float32)
+            ann_info['gt_labels_3d'] = np.zeros(0, dtype=np.int64)
+
+            if self.load_type in ['fov_image_based', 'mv_image_based']:
+                ann_info['gt_bboxes'] = np.zeros((0, 4), dtype=np.float32)
+                ann_info['gt_bboxes_labels'] = np.array(0, dtype=np.int64)
+                ann_info['attr_labels'] = np.array(0, dtype=np.int64)
+                ann_info['centers_2d'] = np.zeros((0, 2), dtype=np.float32)
+                ann_info['depths'] = np.zeros((0), dtype=np.float32)
+
+        # the nuscenes box center is [0.5, 0.5, 0.5], we change it to be
+        # the same as KITTI (0.5, 0.5, 0)
+        # TODO: Unify the coordinates
+        # always for mv_image_based
+        gt_bboxes_3d = CameraInstance3DBoxes(
+            ann_info['gt_bboxes_3d'],
+            box_dim=ann_info['gt_bboxes_3d'].shape[-1],
+            origin=(0.5, 0.5, 0.5))
+   
+
+        ann_info['gt_bboxes_3d'] = gt_bboxes_3d
+
+        return ann_info
+
+    # added from orgiinal
+    def parse_data_info(self, info: dict) -> Union[List[dict], dict]:
+        """Process the raw data info.
+
+        The only difference with it in `Det3DDataset`
+        is the specific process for `plane`.
+
+        Args:
+            info (dict): Raw info dict.
+
+        Returns:
+            List[dict] or dict: Has `ann_info` in training stage. And
+            all path has been converted to absolute path.
+        """
+        # always uses camera modality and multiview images
+        data_list = []
+
+        print(info.keys())
+        
+        # FIX THIS TO USE THE DATA WE HAVE TO LOAD THE IMAGES
+        # for cam_id, img_info in info['images'].items():
+        #     if 'img_path' in img_info:
+        #         if cam_id in self.data_prefix:
+        #             cam_prefix = self.data_prefix[cam_id]
+        #         else:
+        #             cam_prefix = self.data_prefix.get('img', '')
+        #         img_info['img_path'] = osp.join(
+        #             cam_prefix, img_info['img_path'])
+        for cam_id, img_info in info['cams'].items():
+            if 'data_path' in img_info:
+                if cam_id in self.data_prefix:
+                    cam_prefix = self.data_prefix[cam_id]
+                else:
+                    cam_prefix = self.data_prefix.get('img', '')
+                img_info['data_path'] = osp.join(
+                    cam_prefix, img_info['data_path'])
+        print(len(info['cams'].items()))
+        for idx, (cam_id, img_info) in enumerate(info['cams'].items()):
+            print(f"Camera ID: {cam_id}, Image Info Keys: {img_info.keys()}")
+        
+       
+        for idx, (cam_id, img_info) in enumerate(info['cams'].items()):
+            camera_info = dict()
+            camera_info['images'] = dict()
+            camera_info['images'][cam_id] = img_info
+            if 'cam_instances' in info and cam_id in info['cam_instances']:
+                camera_info['instances'] = info['cam_instances'][cam_id]
+            else:
+                camera_info['instances'] = []
+            # TODO: check whether to change sample_idx for 6 cameras
+            #  in one frame
+            camera_info['sample_idx'] = info['sample_idx'] * 6 + idx
+            camera_info['token'] = info['token']
+            camera_info['ego2global'] = info['ego2global']
+
+            if not self.test_mode:
+                # used in traing
+                camera_info['ann_info'] = self.parse_ann_info(camera_info)
+            if self.test_mode and self.load_eval_anns:
+                camera_info['eval_ann_info'] = \
+                    self.parse_ann_info(camera_info)
+            data_list.append(camera_info)
+        return data_list
+    
     def prepare_train_data(self, index):
         """
         Training data preparation.
@@ -47,7 +289,7 @@ class CustomNuScenesDataset(NuScenesDataset):
             input_dict = self.get_data_info(i)
             if input_dict is None:
                 return None
-            self.pre_pipeline(input_dict)
+            # self.pre_pipeline(input_dict)
             example = self.pipeline(input_dict)
             if self.filter_empty_gt and \
                     (example is None or ~(example['gt_labels_3d']._data != -1).any()):
@@ -55,7 +297,6 @@ class CustomNuScenesDataset(NuScenesDataset):
             queue.append(example)
         return self.union2one(queue)
 
-    
     def union2one(self, queue):
         imgs_list = [each['img'].data for each in queue]
         metas_map = {}
@@ -79,16 +320,11 @@ class CustomNuScenesDataset(NuScenesDataset):
                 metas_map[i]['can_bus'][-1] -= prev_angle
                 prev_pos = copy.deepcopy(tmp_pos)
                 prev_angle = copy.deepcopy(tmp_angle)
-        queue[-1]['img'] = torch.stack(imgs_list) # DC(torch.stack(imgs_list), cpu_only=False, stack=True)
-        queue[-1]['img_metas'] = metas_map # DC(metas_map, cpu_only=True)
+        queue[-1]['img'] = DC(torch.stack(imgs_list), cpu_only=False, stack=True)
+        queue[-1]['img_metas'] = DC(metas_map, cpu_only=True)
         queue = queue[-1]
         return queue
 
-    @property
-    def data_infos(self):
-        """Compatibility layer for old API using data_infos."""
-        return self.data_list
-    
     def get_data_info(self, index):
         """Get data info according to the given index.
 
@@ -172,143 +408,6 @@ class CustomNuScenesDataset(NuScenesDataset):
 
         return input_dict
 
-    def parse_data_info(self, info: dict) -> dict:
-      """
-      Override parent's parse_data_info to work with BEVFormer's 'cams' format
-      and count instances for statistics.
-      
-      Args:
-          info (dict): Raw info dict with 'cams' format
-          
-      Returns:
-          dict: The same info dict without modification
-      """
-      # Name mapping from hierarchical to simple
-      name_mapping = {
-          'movable_object.barrier': 'barrier',
-          'vehicle.bicycle': 'bicycle',
-          'vehicle.bus.bendy': 'bus',
-          'vehicle.bus.rigid': 'bus',
-          'vehicle.car': 'car',
-          'vehicle.construction': 'construction_vehicle',
-          'vehicle.motorcycle': 'motorcycle',
-          'human.pedestrian.adult': 'pedestrian',
-          'human.pedestrian.child': 'pedestrian',
-          'human.pedestrian.construction_worker': 'pedestrian',
-          'human.pedestrian.police_officer': 'pedestrian',
-          'movable_object.trafficcone': 'traffic_cone',
-          'vehicle.trailer': 'trailer',
-          'vehicle.truck': 'truck',
-      }
-
-      # Count instances for statistics during dataset initialization
-      if not self.test_mode and 'gt_names' in info:
-          for name in info['gt_names']:
-              mapped_name = name_mapping.get(name, None)
-              if mapped_name is not None and mapped_name in self.METAINFO['classes']:
-                  label = self.METAINFO['classes'].index(mapped_name)
-                  if hasattr(self, 'num_ins_per_cat'):
-                      self.num_ins_per_cat[label] += 1
-
-      # Don't call parent's parse_data_info as it expects 'images' key
-      # Our get_data_info method handles 'cams' format directly
-      return info
-    
-    def get_ann_info(self, index):
-      """Get annotation info according to the given index.
-      
-      Override parent to handle BEVFormer's annotation format directly
-      without circular calls.
-      
-      Args:
-          index (int): Index of the annotation data to get.
-          
-      Returns:
-          dict: Annotation information with mapped class names.
-      """
-      # Name mapping from hierarchical to simple
-      name_mapping = {
-          'movable_object.barrier': 'barrier',
-          'vehicle.bicycle': 'bicycle',
-          'vehicle.bus.bendy': 'bus',
-          'vehicle.bus.rigid': 'bus',
-          'vehicle.car': 'car',
-          'vehicle.construction': 'construction_vehicle',
-          'vehicle.motorcycle': 'motorcycle',
-          'human.pedestrian.adult': 'pedestrian',
-          'human.pedestrian.child': 'pedestrian',
-          'human.pedestrian.construction_worker': 'pedestrian',
-          'human.pedestrian.police_officer': 'pedestrian',
-          'movable_object.trafficcone': 'traffic_cone',
-          'vehicle.trailer': 'trailer',
-          'vehicle.truck': 'truck',
-      }
-
-      # Get info directly from data_list, not through get_data_info (avoid circular call)
-      info = self.data_list[index]
-
-      # Get the annotations
-      gt_boxes = info.get('gt_boxes', np.zeros((0, 7)))
-      gt_names = info.get('gt_names', [])
-      gt_velocity = info.get('gt_velocity', np.zeros((0, 2)))
-      valid_flag = info.get('valid_flag', np.zeros((0,)))
-
-      # Map class names and filter out ignored classes
-      mapped_names = []
-      valid_indices = []
-
-      for i, name in enumerate(gt_names):
-          mapped_name = name_mapping.get(name, None)
-          if mapped_name is not None:  # Only keep mapped classes
-              mapped_names.append(mapped_name)
-              valid_indices.append(i)
-
-      # Filter annotations to only include valid classes
-      if len(valid_indices) > 0:
-          valid_indices = np.array(valid_indices)
-          gt_boxes = gt_boxes[valid_indices]
-          gt_velocity = gt_velocity[valid_indices] if len(gt_velocity) > 0 else gt_velocity
-          valid_flag = valid_flag[valid_indices] if len(valid_flag) > 0 else valid_flag
-      else:
-          gt_boxes = np.zeros((0, 7), dtype=np.float32)
-          gt_velocity = np.zeros((0, 2), dtype=np.float32)
-          valid_flag = np.zeros((0,), dtype=bool)
-
-      # Create labels from class names
-      gt_labels = []
-      for name in mapped_names:
-          if name in self.METAINFO['classes']:
-              label = self.METAINFO['classes'].index(name)
-              gt_labels.append(label)
-              # Track instance count per category (like parent does)
-              if hasattr(self, 'num_ins_per_cat'):
-                  self.num_ins_per_cat[label] += 1
-          else:
-              gt_labels.append(-1)  # Unknown class
-
-      gt_labels = np.array(gt_labels, dtype=np.int64)
-
-      # Format as expected by pipeline
-      anns_results = dict(
-          gt_bboxes_3d=gt_boxes.astype(np.float32),
-          gt_labels_3d=gt_labels,
-          gt_names=mapped_names,  # Keep for reference
-          velocities=gt_velocity.astype(np.float32),  # Note: plural form
-          valid_flag=valid_flag,
-      )
-
-      # Create instances list for compatibility (if needed by evaluation)
-      instances = []
-      for i in range(len(gt_labels)):
-          instances.append({
-              'bbox_3d': gt_boxes[i].tolist(),
-              'bbox_label_3d': int(gt_labels[i]),
-              'velocity': gt_velocity[i].tolist() if i < len(gt_velocity) else [0, 0],
-          })
-      anns_results['instances'] = instances
-
-      return anns_results
-  
     def __getitem__(self, idx):
         """Get item from infos according to the given index.
         Returns:
