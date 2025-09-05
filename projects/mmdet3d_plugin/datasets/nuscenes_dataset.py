@@ -173,19 +173,46 @@ class CustomNuScenesDataset(NuScenesDataset):
         return input_dict
 
     def parse_data_info(self, info: dict) -> dict:
-        """
-        Override parent's parse_data_info to work with BEVFormer's 'cams' format.
-        The actual data processing is done in get_data_info method.
-        
-        Args:
-            info (dict): Raw info dict with 'cams' format
-            
-        Returns:
-            dict: The same info dict without modification
-        """
-        # Don't call parent's parse_data_info as it expects 'images' key
-        # Our get_data_info method handles 'cams' format directly
-        return info
+      """
+      Override parent's parse_data_info to work with BEVFormer's 'cams' format
+      and count instances for statistics.
+      
+      Args:
+          info (dict): Raw info dict with 'cams' format
+          
+      Returns:
+          dict: The same info dict without modification
+      """
+      # Name mapping from hierarchical to simple
+      name_mapping = {
+          'movable_object.barrier': 'barrier',
+          'vehicle.bicycle': 'bicycle',
+          'vehicle.bus.bendy': 'bus',
+          'vehicle.bus.rigid': 'bus',
+          'vehicle.car': 'car',
+          'vehicle.construction': 'construction_vehicle',
+          'vehicle.motorcycle': 'motorcycle',
+          'human.pedestrian.adult': 'pedestrian',
+          'human.pedestrian.child': 'pedestrian',
+          'human.pedestrian.construction_worker': 'pedestrian',
+          'human.pedestrian.police_officer': 'pedestrian',
+          'movable_object.trafficcone': 'traffic_cone',
+          'vehicle.trailer': 'trailer',
+          'vehicle.truck': 'truck',
+      }
+
+      # Count instances for statistics during dataset initialization
+      if not self.test_mode and 'gt_names' in info:
+          for name in info['gt_names']:
+              mapped_name = name_mapping.get(name, None)
+              if mapped_name is not None and mapped_name in self.METAINFO['classes']:
+                  label = self.METAINFO['classes'].index(mapped_name)
+                  if hasattr(self, 'num_ins_per_cat'):
+                      self.num_ins_per_cat[label] += 1
+
+      # Don't call parent's parse_data_info as it expects 'images' key
+      # Our get_data_info method handles 'cams' format directly
+      return info
     
     def get_ann_info(self, index):
       """Get annotation info according to the given index.
