@@ -27,8 +27,9 @@ import warnings
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-from .spatial_attention import SpatialCrossAttention
-from .tempral_attention import TemporalSelfAttention
+from spatial_attention import SpatialCrossAttention
+from tempral_attention import TemporalSelfAttention
+from deformable_attention import MSDeformableAttention3D
 
 
 class FFN(nn.Module):
@@ -91,10 +92,18 @@ class BEVFormerLayer(nn.Module):
             num_levels=attn_cfgs[0].get('num_levels', 1)
         )
         
+        # Create deformable attention instance for spatial attention
+        deform_attn_cfg = attn_cfgs[1].get('deformable_attention', {})
+        deformable_attention = MSDeformableAttention3D(
+            embed_dims=deform_attn_cfg.get('embed_dims', embed_dims),
+            num_levels=deform_attn_cfg.get('num_levels', 4),
+            num_points=deform_attn_cfg.get('num_points', 8)
+        )
+        
         self.spatial_attn = SpatialCrossAttention(
             embed_dims=attn_cfgs[1].get('embed_dims', embed_dims),
             pc_range=attn_cfgs[1].get('pc_range'),
-            deformable_attention=attn_cfgs[1].get('deformable_attention', {})
+            deformable_attention=deformable_attention
         )
         
         # Build norms - need 3 norms total
@@ -132,14 +141,23 @@ class BEVFormerLayer(nn.Module):
         """
         
         # Temporal self attention
+        # The temporal attention always creates internal batch expansion, so we always need to expand reference points
+        temporal_ref_points = ref_2d.repeat(2, 1, 1, 1) if ref_2d is not None else None
+        
+        if prev_bev is not None:
+            # Stack current query and prev_bev for temporal attention
+            temporal_key_value = torch.stack([query, prev_bev], 1).reshape(query.size(0) * 2, query.size(1), query.size(2))
+        else:
+            temporal_key_value = None  # Will be auto-created by temporal attention
+        
         query = self.temporal_attn(
             query,
-            prev_bev if prev_bev is not None else query,  # key
-            prev_bev if prev_bev is not None else query,  # value
+            temporal_key_value,  # key
+            temporal_key_value,  # value
             query_pos=bev_pos,
             key_pos=bev_pos,
             key_padding_mask=query_key_padding_mask,
-            reference_points=ref_2d,
+            reference_points=temporal_ref_points,
             spatial_shapes=torch.tensor([[bev_h, bev_w]], device=query.device) if bev_h and bev_w else None,
             level_start_index=torch.tensor([0], device=query.device),
             **kwargs)
@@ -172,3 +190,189 @@ class BEVFormerLayer(nn.Module):
         query = self.norm3(query)
 
         return query
+
+
+def test_bev_former_layer():
+    """Test BEVFormerLayer module"""
+    print("=" * 60)
+    print("Testing BEVFormerLayer")
+    print("=" * 60)
+    
+    # Config parameters from BEVFormer
+    embed_dims = 256
+    feedforward_channels = 1024
+    pc_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+    
+    try:
+        # Create attention configs as per BEVFormer
+        attn_cfgs = [
+            {
+                'type': 'TemporalSelfAttention',
+                'embed_dims': embed_dims,
+                'num_levels': 1
+            },
+            {
+                'type': 'SpatialCrossAttention',
+                'embed_dims': embed_dims,
+                'pc_range': pc_range,
+                'deformable_attention': {
+                    'type': 'MSDeformableAttention3D',
+                    'embed_dims': embed_dims,
+                    'num_points': 8,
+                    'num_levels': 4
+                }
+            }
+        ]
+        
+        # Create model
+        model = BEVFormerLayer(
+            attn_cfgs=attn_cfgs,
+            feedforward_channels=feedforward_channels,
+            embed_dims=embed_dims,
+            ffn_dropout=0.1
+        )
+        
+        print(f"✓ Model created successfully")
+        print(f"  - embed_dims: {embed_dims}")
+        print(f"  - feedforward_channels: {feedforward_channels}")
+        print(f"  - pc_range: {pc_range}")
+        
+        # Test inputs
+        batch_size = 2
+        bev_h, bev_w = 50, 50
+        num_queries = bev_h * bev_w  # 2500 BEV queries
+        num_cams = 6
+        
+        # BEV query (current BEV features)
+        query = torch.randn(batch_size, num_queries, embed_dims)
+        
+        # Previous BEV for temporal attention
+        prev_bev = torch.randn(batch_size, num_queries, embed_dims)
+        
+        # Multi-camera image features for spatial attention
+        img_h, img_w = 25, 15
+        num_levels = 4
+        
+        # Create multi-scale image features
+        key_list = []
+        value_list = []
+        spatial_shapes_list = []
+        
+        for level in range(num_levels):
+            h, w = img_h // (2 ** level), img_w // (2 ** level)
+            h, w = max(h, 1), max(w, 1)
+            
+            level_key = torch.randn(batch_size, num_cams, embed_dims, h, w)
+            level_value = torch.randn(batch_size, num_cams, embed_dims, h, w)
+            
+            # Reshape to [num_cams, h*w, bs, embed_dims] as expected by spatial attention
+            level_key = level_key.permute(1, 3, 4, 0, 2).reshape(num_cams, h * w, batch_size, embed_dims)
+            level_value = level_value.permute(1, 3, 4, 0, 2).reshape(num_cams, h * w, batch_size, embed_dims)
+            
+            key_list.append(level_key)
+            value_list.append(level_value)
+            spatial_shapes_list.append([h, w])
+        
+        # Concatenate all levels
+        key = torch.cat(key_list, dim=1)  # [num_cams, total_hw, bs, embed_dims]
+        value = torch.cat(value_list, dim=1)
+        
+        spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+        level_start_index = torch.cat([
+            torch.tensor([0]), 
+            torch.tensor([h*w for h, w in spatial_shapes_list]).cumsum(0)[:-1]
+        ])
+        
+        # Reference points for temporal attention (2D BEV grid)
+        ref_2d = torch.rand(batch_size, num_queries, 1, 2)  # BEV uses single level
+        
+        # Reference points for spatial attention (3D with Z-anchors)  
+        num_Z_anchors = 4
+        ref_3d = torch.rand(batch_size, num_queries, num_levels, 2)
+        reference_points_cam = torch.rand(batch_size, num_queries, num_Z_anchors, 2)
+        
+        # BEV mask for spatial attention
+        bev_mask = torch.zeros(num_cams, batch_size, num_queries, dtype=torch.bool)
+        for cam_id in range(num_cams):
+            # Each camera sees overlapping regions
+            start_idx = (cam_id * num_queries // (num_cams + 2))
+            end_idx = ((cam_id + 3) * num_queries // (num_cams + 2))
+            end_idx = min(end_idx, num_queries)
+            bev_mask[cam_id, :, start_idx:end_idx] = True
+        
+        # BEV positional encoding
+        bev_pos = torch.randn(batch_size, num_queries, embed_dims)
+        
+        print(f"✓ Test inputs created")
+        print(f"  - query shape: {query.shape}")
+        print(f"  - key shape: {key.shape}")
+        print(f"  - value shape: {value.shape}")
+        print(f"  - prev_bev shape: {prev_bev.shape}")
+        print(f"  - spatial_shapes: {spatial_shapes}")
+        print(f"  - bev_mask: {bev_mask.shape}")
+        
+        # Forward pass through complete BEVFormerLayer
+        with torch.no_grad():
+            output = model(
+                query=query,
+                key=key,
+                value=value,
+                bev_pos=bev_pos,
+                bev_h=bev_h,
+                bev_w=bev_w,
+                ref_2d=ref_2d,
+                ref_3d=ref_3d,
+                reference_points_cam=reference_points_cam,
+                bev_mask=bev_mask,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                prev_bev=prev_bev
+            )
+        
+        print(f"✓ Forward pass successful")
+        print(f"  - output shape: {output.shape}")
+        print(f"  - expected shape: {query.shape}")
+        
+        # Verify output shape
+        assert output.shape == query.shape, f"Output shape {output.shape} != expected {query.shape}"
+        
+        # Verify output is not NaN or Inf
+        assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
+        
+        # Test without previous BEV (first frame)
+        with torch.no_grad():
+            output_no_prev = model(
+                query=query,
+                key=key,
+                value=value,
+                bev_pos=bev_pos,
+                bev_h=bev_h,
+                bev_w=bev_w,
+                ref_2d=ref_2d,
+                ref_3d=ref_3d,
+                reference_points_cam=reference_points_cam,
+                bev_mask=bev_mask,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index,
+                prev_bev=None  # No previous BEV
+            )
+        
+        print(f"✓ Forward pass without prev_bev successful")
+        print(f"  - output shape: {output_no_prev.shape}")
+        
+        assert output_no_prev.shape == query.shape, f"Output shape {output_no_prev.shape} != expected {query.shape}"
+        assert torch.isfinite(output_no_prev).all(), "Output contains NaN or Inf values"
+        
+        print("✓ All assertions passed")
+        print("🎉 BEVFormerLayer test PASSED!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Test FAILED with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+if __name__ == "__main__":
+    test_bev_former_layer()
