@@ -6,13 +6,13 @@ from mmdet.registry import DATASETS
 from mmdet3d.datasets import NuScenesDataset
 import mmcv
 from os import path as osp
-# from mmdet.datasets import DATASETS --- IGNORE ---
+# from mmdet.datasets import DATASETS
 import torch
 import numpy as np
 from nuscenes.eval.common.utils import quaternion_yaw, Quaternion
 from .nuscnes_eval import NuScenesEval_custom
 from projects.mmdet3d_plugin.models.utils.visual import save_tensor
-# from mmcv.parallel import DataContainer as DC # data container has been removed use directo tensor operations
+# from mmcv.parallel import DataContainer as DC
 import random
 
 
@@ -24,12 +24,6 @@ class CustomNuScenesDataset(NuScenesDataset):
     """
 
     def __init__(self, queue_length=4, bev_size=(200, 200), overlap_test=False, *args, **kwargs):
-        if 'classes' in kwargs:
-            classes = kwargs.pop('classes')
-        if 'bev_size' in kwargs:
-            bev_size = kwargs.pop('bev_size')
-        if 'queue_length' in kwargs:
-            queue_length = kwargs.pop('queue_length')
         super().__init__(*args, **kwargs)
         self.queue_length = queue_length
         self.overlap_test = overlap_test
@@ -61,7 +55,7 @@ class CustomNuScenesDataset(NuScenesDataset):
             queue.append(example)
         return self.union2one(queue)
 
-
+    
     def union2one(self, queue):
         imgs_list = [each['img'].data for each in queue]
         metas_map = {}
@@ -90,6 +84,11 @@ class CustomNuScenesDataset(NuScenesDataset):
         queue = queue[-1]
         return queue
 
+    @property
+    def data_infos(self):
+        """Compatibility layer for old API using data_infos."""
+        return self.data_list
+    
     def get_data_info(self, index):
         """Get data info according to the given index.
 
@@ -173,6 +172,116 @@ class CustomNuScenesDataset(NuScenesDataset):
 
         return input_dict
 
+    def parse_data_info(self, info: dict) -> dict:
+        """
+        Override parent's parse_data_info to work with BEVFormer's 'cams' format.
+        The actual data processing is done in get_data_info method.
+        
+        Args:
+            info (dict): Raw info dict with 'cams' format
+            
+        Returns:
+            dict: The same info dict without modification
+        """
+        # Don't call parent's parse_data_info as it expects 'images' key
+        # Our get_data_info method handles 'cams' format directly
+        return info
+    
+    def get_ann_info(self, index):
+      """Get annotation info according to the given index.
+      
+      Override parent to handle BEVFormer's annotation format directly
+      without circular calls.
+      
+      Args:
+          index (int): Index of the annotation data to get.
+          
+      Returns:
+          dict: Annotation information with mapped class names.
+      """
+      # Name mapping from hierarchical to simple
+      name_mapping = {
+          'movable_object.barrier': 'barrier',
+          'vehicle.bicycle': 'bicycle',
+          'vehicle.bus.bendy': 'bus',
+          'vehicle.bus.rigid': 'bus',
+          'vehicle.car': 'car',
+          'vehicle.construction': 'construction_vehicle',
+          'vehicle.motorcycle': 'motorcycle',
+          'human.pedestrian.adult': 'pedestrian',
+          'human.pedestrian.child': 'pedestrian',
+          'human.pedestrian.construction_worker': 'pedestrian',
+          'human.pedestrian.police_officer': 'pedestrian',
+          'movable_object.trafficcone': 'traffic_cone',
+          'vehicle.trailer': 'trailer',
+          'vehicle.truck': 'truck',
+      }
+
+      # Get info directly from data_list, not through get_data_info (avoid circular call)
+      info = self.data_list[index]
+
+      # Get the annotations
+      gt_boxes = info.get('gt_boxes', np.zeros((0, 7)))
+      gt_names = info.get('gt_names', [])
+      gt_velocity = info.get('gt_velocity', np.zeros((0, 2)))
+      valid_flag = info.get('valid_flag', np.zeros((0,)))
+
+      # Map class names and filter out ignored classes
+      mapped_names = []
+      valid_indices = []
+
+      for i, name in enumerate(gt_names):
+          mapped_name = name_mapping.get(name, None)
+          if mapped_name is not None:  # Only keep mapped classes
+              mapped_names.append(mapped_name)
+              valid_indices.append(i)
+
+      # Filter annotations to only include valid classes
+      if len(valid_indices) > 0:
+          valid_indices = np.array(valid_indices)
+          gt_boxes = gt_boxes[valid_indices]
+          gt_velocity = gt_velocity[valid_indices] if len(gt_velocity) > 0 else gt_velocity
+          valid_flag = valid_flag[valid_indices] if len(valid_flag) > 0 else valid_flag
+      else:
+          gt_boxes = np.zeros((0, 7), dtype=np.float32)
+          gt_velocity = np.zeros((0, 2), dtype=np.float32)
+          valid_flag = np.zeros((0,), dtype=bool)
+
+      # Create labels from class names
+      gt_labels = []
+      for name in mapped_names:
+          if name in self.METAINFO['classes']:
+              label = self.METAINFO['classes'].index(name)
+              gt_labels.append(label)
+              # Track instance count per category (like parent does)
+              if hasattr(self, 'num_ins_per_cat'):
+                  self.num_ins_per_cat[label] += 1
+          else:
+              gt_labels.append(-1)  # Unknown class
+
+      gt_labels = np.array(gt_labels, dtype=np.int64)
+
+      # Format as expected by pipeline
+      anns_results = dict(
+          gt_bboxes_3d=gt_boxes.astype(np.float32),
+          gt_labels_3d=gt_labels,
+          gt_names=mapped_names,  # Keep for reference
+          velocities=gt_velocity.astype(np.float32),  # Note: plural form
+          valid_flag=valid_flag,
+      )
+
+      # Create instances list for compatibility (if needed by evaluation)
+      instances = []
+      for i in range(len(gt_labels)):
+          instances.append({
+              'bbox_3d': gt_boxes[i].tolist(),
+              'bbox_label_3d': int(gt_labels[i]),
+              'velocity': gt_velocity[i].tolist() if i < len(gt_velocity) else [0, 0],
+          })
+      anns_results['instances'] = instances
+
+      return anns_results
+  
     def __getitem__(self, idx):
         """Get item from infos according to the given index.
         Returns:
