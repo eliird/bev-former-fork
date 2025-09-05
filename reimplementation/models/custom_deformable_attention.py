@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn as nn
-from yaml import warnings
+import warnings
 from deformable_attention import (
     MultiScaleDeformableAttnFunction_fp16, 
     MultiScaleDeformableAttnFunction_fp32, 
@@ -49,7 +49,7 @@ class CustomMSDeformableAttention(nn.Module):
                  batch_first=False,
                  norm_cfg=None,
                  init_cfg=None):
-        super().__init__(init_cfg)
+        super().__init__()
         if embed_dims % num_heads != 0:
             raise ValueError(f'embed_dims must be divisible by num_heads, '
                              f'but got {embed_dims} and {num_heads}')
@@ -212,7 +212,7 @@ class CustomMSDeformableAttention(nn.Module):
             output = multi_scale_deformable_attn_pytorch(
                 value, spatial_shapes, sampling_locations, attention_weights)
         else:
-            _pure_pytorch_deformable_attn(
+            output = _pure_pytorch_deformable_attn(
                 value, spatial_shapes, sampling_locations, attention_weights
             )
         output = self.output_proj(output)
@@ -222,3 +222,139 @@ class CustomMSDeformableAttention(nn.Module):
             output = output.permute(1, 0, 2)
 
         return self.dropout(output) + identity
+
+
+def test_custom_msdeformable_attention():
+    """Test CustomMSDeformableAttention module"""
+    print("=" * 60)
+    print("Testing CustomMSDeformableAttention")
+    print("=" * 60)
+    
+    # Config parameters for decoder
+    embed_dims = 256
+    num_heads = 8
+    num_levels = 1  # Decoder typically uses single level BEV
+    num_points = 4
+    
+    try:
+        # Create model
+        model = CustomMSDeformableAttention(
+            embed_dims=embed_dims,
+            num_heads=num_heads,
+            num_levels=num_levels,
+            num_points=num_points,
+            batch_first=False  # Decoder uses (num_query, bs, embed_dims)
+        )
+        
+        print(f"✓ Model created successfully")
+        print(f"  - embed_dims: {embed_dims}")
+        print(f"  - num_heads: {num_heads}")
+        print(f"  - num_levels: {num_levels}")
+        print(f"  - num_points: {num_points}")
+        print(f"  - batch_first: False")
+        
+        # Test inputs for decoder attention
+        batch_size = 2
+        num_queries = 900  # Typical number of object queries
+        
+        # Query tensor (object queries) - shape: (num_query, bs, embed_dims)
+        query = torch.randn(num_queries, batch_size, embed_dims)
+        
+        # Single level BEV features for decoder cross-attention
+        bev_h, bev_w = 200, 200  # Full BEV resolution
+        num_value = bev_h * bev_w  # 40000 BEV positions
+        
+        # Key and Value from encoder (BEV features)
+        key = torch.randn(num_value, batch_size, embed_dims)
+        value = torch.randn(num_value, batch_size, embed_dims)
+        
+        # Spatial shapes for single BEV level
+        spatial_shapes = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
+        level_start_index = torch.tensor([0], dtype=torch.long)
+        
+        # Reference points for object queries (2D normalized coordinates)
+        reference_points = torch.rand(batch_size, num_queries, num_levels, 2)
+        
+        # Query positional encoding
+        query_pos = torch.randn(num_queries, batch_size, embed_dims)
+        
+        print(f"✓ Test inputs created")
+        print(f"  - query shape: {query.shape}")
+        print(f"  - key shape: {key.shape}")
+        print(f"  - value shape: {value.shape}")
+        print(f"  - spatial_shapes: {spatial_shapes}")
+        print(f"  - reference_points shape: {reference_points.shape}")
+        
+        # Forward pass
+        with torch.no_grad():
+            output = model(
+                query=query,
+                key=key,
+                value=value,
+                query_pos=query_pos,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index
+            )
+        
+        print(f"✓ Forward pass successful")
+        print(f"  - output shape: {output.shape}")
+        print(f"  - expected shape: {query.shape}")
+        
+        # Verify output shape
+        assert output.shape == query.shape, f"Output shape {output.shape} != expected {query.shape}"
+        
+        # Verify output is not NaN or Inf
+        assert torch.isfinite(output).all(), "Output contains NaN or Inf values"
+        
+        # Test without query_pos
+        with torch.no_grad():
+            output_no_pos = model(
+                query=query,
+                key=key,
+                value=value,
+                query_pos=None,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index
+            )
+        
+        print(f"✓ Forward pass without query_pos successful")
+        print(f"  - output shape: {output_no_pos.shape}")
+        
+        assert output_no_pos.shape == query.shape, f"Output shape {output_no_pos.shape} != expected {query.shape}"
+        assert torch.isfinite(output_no_pos).all(), "Output contains NaN or Inf values"
+        
+        # Test with 4D reference points (with width/height)
+        reference_points_4d = torch.rand(batch_size, num_queries, num_levels, 4)
+        
+        with torch.no_grad():
+            output_4d = model(
+                query=query,
+                key=key,
+                value=value,
+                query_pos=query_pos,
+                reference_points=reference_points_4d,
+                spatial_shapes=spatial_shapes,
+                level_start_index=level_start_index
+            )
+        
+        print(f"✓ Forward pass with 4D reference points successful")
+        print(f"  - output shape: {output_4d.shape}")
+        
+        assert output_4d.shape == query.shape, f"Output shape {output_4d.shape} != expected {query.shape}"
+        assert torch.isfinite(output_4d).all(), "Output contains NaN or Inf values"
+        
+        print("✓ All assertions passed")
+        print("🎉 CustomMSDeformableAttention test PASSED!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Test FAILED with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+if __name__ == "__main__":
+    test_custom_msdeformable_attention()

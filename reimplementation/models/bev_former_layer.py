@@ -89,7 +89,8 @@ class BEVFormerLayer(nn.Module):
         # Build attentions - always temporal then spatial
         self.temporal_attn = TemporalSelfAttention(
             embed_dims=attn_cfgs[0].get('embed_dims', embed_dims),
-            num_levels=attn_cfgs[0].get('num_levels', 1)
+            num_levels=attn_cfgs[0].get('num_levels', 1),
+            batch_first=True  # BEVFormerLayer uses (bs, num_query, embed_dims)
         )
         
         # Create deformable attention instance for spatial attention
@@ -145,8 +146,9 @@ class BEVFormerLayer(nn.Module):
         temporal_ref_points = ref_2d.repeat(2, 1, 1, 1) if ref_2d is not None else None
         
         if prev_bev is not None:
-            # Stack current query and prev_bev for temporal attention
-            temporal_key_value = torch.stack([query, prev_bev], 1).reshape(query.size(0) * 2, query.size(1), query.size(2))
+            # Create temporal value by stacking current query and prev_bev
+            # Follow original BEVFormer pattern: torch.stack([query, prev_bev], 1).reshape(bs*2, num_query, embed_dims)
+            temporal_key_value = torch.stack([query, prev_bev], 1).reshape(query.shape[0]*2, query.shape[1], query.shape[2])
         else:
             temporal_key_value = None  # Will be auto-created by temporal attention
         
