@@ -247,6 +247,13 @@ def validate(model, val_loader, logger, writer, epoch):
                 batch_gt_bboxes_3d = batch['gt_bboxes_3d']
                 batch_gt_labels_3d = batch['gt_labels_3d']
             
+            # Debug: Check GT data
+            if batch_idx == 0:
+                logger.info(f"First validation batch GT data:")
+                logger.info(f"  - gt_bboxes_3d shapes: {[bbox.shape for bbox in batch_gt_bboxes_3d]}")
+                logger.info(f"  - gt_labels_3d shapes: {[labels.shape for labels in batch_gt_labels_3d]}")
+                logger.info(f"  - gt_bboxes_3d samples: {[bbox.sum().item() for bbox in batch_gt_bboxes_3d]}")
+            
             # Forward pass
             losses = model.forward_train(
                 img=batch_img,
@@ -255,10 +262,14 @@ def validate(model, val_loader, logger, writer, epoch):
                 gt_labels_3d=batch_gt_labels_3d
             )
             
+            # Debug: Check loss values
+            if batch_idx == 0:
+                logger.info(f"First validation batch losses: {losses}")
+            
             # Accumulate losses
             batch_total_loss = 0
             for key, value in losses.items():
-                if torch.is_tensor(value) and value.requires_grad:
+                if torch.is_tensor(value):  # Remove requires_grad check for validation
                     loss_val = value.item()
                     batch_total_loss += loss_val
                     
@@ -375,7 +386,7 @@ def train_epoch(model, train_loader, optimizer, scheduler, epoch, logger, writer
                 
                 for key, value in batch_losses.items():
                     writer.add_scalar(f'train/{key}', value, iteration)
-    
+
     # Scheduler step (if per-epoch)
     if scheduler and args.scheduler_step == 'epoch':
         scheduler.step()
