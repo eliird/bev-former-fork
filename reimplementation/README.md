@@ -17,22 +17,24 @@ unzip can_bus.zip && mv can_bus data/
 
 ### 2. Prepare Dataset
 ```bash
+# tools is in the main cloned directory.
 python tools/create_data.py nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes --version v1.0-mini --canbus ./data
+
+mv ./data reimplementation/data
 ```
 
 ### 3. Train
 ```bash
+cd  reimplementation
 # Quick test (2 epochs)
 python example_training.py quick_test
-
-# Full training
-python train_bevformer.py
+# check example training fro more options
 ```
 
 ## Features
-- ✅ Pure PyTorch (no MMDetection)
-- ✅ Temporal modeling with 4-frame sequences  
-- ✅ Multi-view camera input (6 cameras)
-- ✅ Complete loss functions (FocalLoss + L1Loss + GIoULoss)
-- ✅ TensorBoard logging
-- ✅ Checkpoint saving/loading
+- Pure PyTorch (no MMDetection)
+- Temporal modeling with 4-frame sequences  
+- Multi-view camera input (6 cameras)
+- Complete loss functions (FocalLoss + L1Loss + GIoULoss)
+- TensorBoard logging
+- Checkpoint saving/loading
