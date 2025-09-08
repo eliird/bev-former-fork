@@ -288,7 +288,8 @@ class NuScenesDataset(Dataset):
             'img_metas': img_metas
         }
         
-        if self.training and 'gt_bboxes_3d' in frames[-1]:
+        # Always include GT data if available (needed for both training and validation)
+        if 'gt_bboxes_3d' in frames[-1]:
             result['gt_bboxes_3d'] = frames[-1]['gt_bboxes_3d']
             result['gt_labels_3d'] = frames[-1]['gt_labels_3d']
         

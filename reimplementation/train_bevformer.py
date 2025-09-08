@@ -151,7 +151,7 @@ def create_dataloader(args, training: bool = True):
     dataset = NuScenesDataset(
         data_file=data_file,
         queue_length=args.queue_length,
-        training=training,
+        training=training,  # Training mode controls augmentation, but GT data always included
         point_cloud_range=args.point_cloud_range,
         class_names=args.class_names
     )
@@ -232,6 +232,11 @@ def validate(model, val_loader, logger, writer, epoch):
     
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
+            # Check if GT data is available (should be for validation)
+            if 'gt_bboxes_3d' not in batch or 'gt_labels_3d' not in batch:
+                logger.warning(f"Validation batch {batch_idx} missing GT data, skipping...")
+                continue
+            
             # Move batch to GPU
             if torch.cuda.is_available():
                 batch_img = batch['img'].cuda()

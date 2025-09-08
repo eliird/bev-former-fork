@@ -24,10 +24,10 @@ def run_training_example(config_name: str):
             '--data_root', '/home/irdali.durrani/po-pi/BEVFormer/reimplementation/data/nuscenes',
             '--train_pkl', 'nuscenes_infos_temporal_val.pkl',  # Use val as train for quick test
             '--val_pkl', 'nuscenes_infos_temporal_val.pkl',
-            '--batch_size', '1',
+            '--batch_size', '2',
             '--epochs', '2',
-            '--encoder_layers', '1',  # Minimal layers for testing
-            '--decoder_layers', '1',
+            '--encoder_layers', '3',  # Minimal layers for testing
+            '--decoder_layers', '3',
             '--log_interval', '5',
             '--val_interval', '1',
             '--exp_name', 'quick_test'
