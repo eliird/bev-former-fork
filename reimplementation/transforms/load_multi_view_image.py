@@ -116,9 +116,6 @@ class LoadMultiViewImageFromFiles:
             
             filepath = cam_info['data_path']
             
-            # TODO: remove
-            filepath = '.' + filepath
-            
             # Load image
             img = self._load_single_image(filepath)
             imgs.append(img)
