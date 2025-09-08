@@ -183,116 +183,117 @@ class PerceptionTransformer(nn.Module):
                         prev_bev=None,
                         **kwargs):
         """Obtain bev features."""
-        with autocast(enabled=True, dtype=torch.float16):
-            bs = mlvl_feats[0].size(0)
-            bev_queries = bev_queries.unsqueeze(0).repeat(bs, 1, 1)  # (bs, num_queries, embed_dims)
-            bev_pos = bev_pos.flatten(2).permute(0, 2, 1)  # (bs, num_queries, embed_dims)
+        # Disable autocast for now to avoid dtype mismatch issues
+        # with autocast(enabled=True, dtype=torch.float16):
+        bs = mlvl_feats[0].size(0)
+        bev_queries = bev_queries.unsqueeze(0).repeat(bs, 1, 1)  # (bs, num_queries, embed_dims)
+        bev_pos = bev_pos.flatten(2).permute(0, 2, 1)  # (bs, num_queries, embed_dims)
 
-            # Obtain rotation angle and shift with ego motion
-            delta_x = np.array([each['can_bus'][0]
-                            for each in kwargs['img_metas']])
-            delta_y = np.array([each['can_bus'][1]
-                            for each in kwargs['img_metas']])
-            ego_angle = np.array(
-                [each['can_bus'][-2] / np.pi * 180 for each in kwargs['img_metas']])
-            grid_length_y = grid_length[0]
-            grid_length_x = grid_length[1]
-            translation_length = np.sqrt(delta_x ** 2 + delta_y ** 2)
-            translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
-            bev_angle = ego_angle - translation_angle
-            shift_y = translation_length * \
-                np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
-            shift_x = translation_length * \
-                np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
-            shift_y = shift_y * self.use_shift
-            shift_x = shift_x * self.use_shift
-            shift = bev_queries.new_tensor(
-                [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
+        # Obtain rotation angle and shift with ego motion
+        delta_x = np.array([each['can_bus'][0]
+                        for each in kwargs['img_metas']])
+        delta_y = np.array([each['can_bus'][1]
+                        for each in kwargs['img_metas']])
+        ego_angle = np.array(
+            [each['can_bus'][-2] / np.pi * 180 for each in kwargs['img_metas']])
+        grid_length_y = grid_length[0]
+        grid_length_x = grid_length[1]
+        translation_length = np.sqrt(delta_x ** 2 + delta_y ** 2)
+        translation_angle = np.arctan2(delta_y, delta_x) / np.pi * 180
+        bev_angle = ego_angle - translation_angle
+        shift_y = translation_length * \
+            np.cos(bev_angle / 180 * np.pi) / grid_length_y / bev_h
+        shift_x = translation_length * \
+            np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
+        shift_y = shift_y * self.use_shift
+        shift_x = shift_x * self.use_shift
+        shift = bev_queries.new_tensor(
+            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
 
-            if prev_bev is not None:
-                # Ensure prev_bev has correct shape (bs, num_queries, embed_dims)
-                if prev_bev.shape[0] == bev_h * bev_w:
-                    prev_bev = prev_bev.permute(1, 0, 2)
-                if False:  # Disable rotation for now
-                    for i in range(bs):
-                        rotation_angle = kwargs['img_metas'][i]['can_bus'][-1]
-                        # Ensure rotation_angle is a scalar float
-                        if hasattr(rotation_angle, 'item'):
-                            rotation_angle = rotation_angle.item()
-                        else:
-                            rotation_angle = float(rotation_angle)
-                        
-                        tmp_prev_bev = prev_bev[:, i].reshape(
-                            bev_h, bev_w, -1).permute(2, 0, 1)
-                        tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle,
-                                            center=self.rotate_center)
-                        tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0).reshape(
-                            bev_h * bev_w, 1, -1)
-                        prev_bev[:, i] = tmp_prev_bev[:, 0]
+        if prev_bev is not None:
+            # Ensure prev_bev has correct shape (bs, num_queries, embed_dims)
+            if prev_bev.shape[0] == bev_h * bev_w:
+                prev_bev = prev_bev.permute(1, 0, 2)
+            if False:  # Disable rotation for now
+                for i in range(bs):
+                    rotation_angle = kwargs['img_metas'][i]['can_bus'][-1]
+                    # Ensure rotation_angle is a scalar float
+                    if hasattr(rotation_angle, 'item'):
+                        rotation_angle = rotation_angle.item()
+                    else:
+                        rotation_angle = float(rotation_angle)
+                    
+                    tmp_prev_bev = prev_bev[:, i].reshape(
+                        bev_h, bev_w, -1).permute(2, 0, 1)
+                    tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle,
+                                        center=self.rotate_center)
+                    tmp_prev_bev = tmp_prev_bev.permute(1, 2, 0).reshape(
+                        bev_h * bev_w, 1, -1)
+                    prev_bev[:, i] = tmp_prev_bev[:, 0]
 
-            # Add can bus signals
-            can_bus = bev_queries.new_tensor(
-                [each['can_bus'] for each in kwargs['img_metas']])
-            can_bus = self.can_bus_mlp(can_bus)[:, None, :]  # (bs, 1, embed_dims)
-            bev_queries = bev_queries + can_bus * self.use_can_bus
+        # Add can bus signals
+        can_bus = bev_queries.new_tensor(
+            [each['can_bus'] for each in kwargs['img_metas']])
+        can_bus = self.can_bus_mlp(can_bus)[:, None, :]  # (bs, 1, embed_dims)
+        bev_queries = bev_queries + can_bus * self.use_can_bus
 
-            feat_flatten = []
-            spatial_shapes = []
-            for lvl, feat in enumerate(mlvl_feats):
-                bs, num_cam, c, h, w = feat.shape
-                spatial_shape = (h, w)
-                feat = feat.flatten(3).permute(1, 0, 3, 2)
-                if self.use_cams_embeds:
-                    feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
-                feat = feat + self.level_embeds[None,
-                                                None, lvl:lvl + 1, :].to(feat.dtype)
-                spatial_shapes.append(spatial_shape)
-                feat_flatten.append(feat)
+        feat_flatten = []
+        spatial_shapes = []
+        for lvl, feat in enumerate(mlvl_feats):
+            bs, num_cam, c, h, w = feat.shape
+            spatial_shape = (h, w)
+            feat = feat.flatten(3).permute(1, 0, 3, 2)
+            if self.use_cams_embeds:
+                feat = feat + self.cams_embeds[:, None, None, :].to(feat.dtype)
+            feat = feat + self.level_embeds[None,
+                                            None, lvl:lvl + 1, :].to(feat.dtype)
+            spatial_shapes.append(spatial_shape)
+            feat_flatten.append(feat)
 
-            feat_flatten = torch.cat(feat_flatten, 2)
-            spatial_shapes = torch.as_tensor(
-                spatial_shapes, dtype=torch.long, device=bev_pos.device)
-            level_start_index = torch.cat((spatial_shapes.new_zeros(
-                (1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        feat_flatten = torch.cat(feat_flatten, 2)
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=bev_pos.device)
+        level_start_index = torch.cat((spatial_shapes.new_zeros(
+            (1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
 
-            feat_flatten = feat_flatten.permute(
-                0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
+        feat_flatten = feat_flatten.permute(
+            0, 2, 1, 3)  # (num_cam, H*W, bs, embed_dims)
 
-            # Create reference points needed by BEVFormerEncoder layers
-            # Reference points for temporal attention (2D BEV grid)
-            ref_2d = torch.rand(bs, bev_h * bev_w, 1, 2, device=bev_pos.device)  # BEV uses single level
+        # Create reference points needed by BEVFormerEncoder layers
+        # Reference points for temporal attention (2D BEV grid)
+        ref_2d = torch.rand(bs, bev_h * bev_w, 1, 2, device=bev_pos.device)  # BEV uses single level
+        
+        # Reference points for spatial attention (3D with Z-anchors)  
+        num_Z_anchors = 4
+        ref_3d = torch.rand(bs, bev_h * bev_w, self.num_feature_levels, 2, device=bev_pos.device)
+        reference_points_cam = torch.rand(bs, bev_h * bev_w, num_Z_anchors, 2, device=bev_pos.device)
             
-            # Reference points for spatial attention (3D with Z-anchors)  
-            num_Z_anchors = 4
-            ref_3d = torch.rand(bs, bev_h * bev_w, self.num_feature_levels, 2, device=bev_pos.device)
-            reference_points_cam = torch.rand(bs, bev_h * bev_w, num_Z_anchors, 2, device=bev_pos.device)
-            
-            # BEV mask for spatial attention
-            bev_mask = torch.zeros(self.num_cams, bs, bev_h * bev_w, dtype=torch.bool, device=bev_pos.device)
-            for cam_id in range(self.num_cams):
-                # Each camera sees overlapping regions
-                start_idx = (cam_id * (bev_h * bev_w) // (self.num_cams + 2))
-                end_idx = ((cam_id + 3) * (bev_h * bev_w) // (self.num_cams + 2))
-                end_idx = min(end_idx, bev_h * bev_w)
-                bev_mask[cam_id, :, start_idx:end_idx] = True
+        # BEV mask for spatial attention
+        bev_mask = torch.zeros(self.num_cams, bs, bev_h * bev_w, dtype=torch.bool, device=bev_pos.device)
+        for cam_id in range(self.num_cams):
+            # Each camera sees overlapping regions
+            start_idx = (cam_id * (bev_h * bev_w) // (self.num_cams + 2))
+            end_idx = ((cam_id + 3) * (bev_h * bev_w) // (self.num_cams + 2))
+            end_idx = min(end_idx, bev_h * bev_w)
+            bev_mask[cam_id, :, start_idx:end_idx] = True
 
-            bev_embed = self.encoder(
-                bev_queries,
-                feat_flatten,
-                feat_flatten,
-                bev_h=bev_h,
-                bev_w=bev_w,
-                bev_pos=bev_pos,
-                spatial_shapes=spatial_shapes,
-                level_start_index=level_start_index,
-                prev_bev=prev_bev,
-                shift=shift,
-                ref_2d=ref_2d,
-                ref_3d=ref_3d,
-                reference_points_cam=reference_points_cam,
-                bev_mask=bev_mask,
-                **kwargs
-            )
+        bev_embed = self.encoder(
+            bev_queries,
+            feat_flatten,
+            feat_flatten,
+            bev_h=bev_h,
+            bev_w=bev_w,
+            bev_pos=bev_pos,
+            spatial_shapes=spatial_shapes,
+            level_start_index=level_start_index,
+            prev_bev=prev_bev,
+            shift=shift,
+            ref_2d=ref_2d,
+            ref_3d=ref_3d,
+            reference_points_cam=reference_points_cam,
+            bev_mask=bev_mask,
+            **kwargs
+        )
 
         return bev_embed
 
