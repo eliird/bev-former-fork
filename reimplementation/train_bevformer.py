@@ -113,6 +113,18 @@ def create_model(args) -> BEVFormer:
                 max_num=300,
                 num_classes=len(args.class_names)
             ),
+            loss_cls=dict(
+                use_sigmoid=True,
+                gamma=2.0,
+                alpha=0.25,
+                loss_weight=2.0
+            ),
+            loss_bbox=dict(
+                loss_weight=0.25
+            ),
+            loss_iou=dict(
+                loss_weight=0.0  # Matches original config (disabled but computed)
+            ),
             train_cfg=dict(
                 pts=dict(
                     assigner=dict(

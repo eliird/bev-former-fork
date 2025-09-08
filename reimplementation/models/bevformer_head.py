@@ -518,11 +518,26 @@ class BEVFormerHead(nn.Module):
             avg_factor=num_total_pos
         )
         
+        # IoU loss - compute GIoU for better box regression
+        if hasattr(self, 'loss_iou') and self.loss_iou.loss_weight > 0:
+            # Convert predictions and targets to corners format for IoU computation
+            # For now, use L1 loss as a placeholder since GIoU requires corner conversion
+            loss_iou = self.loss_iou(
+                bbox_preds[isnotnan, :10],
+                normalized_bbox_targets[isnotnan, :10],
+                bbox_weights[isnotnan, :10],
+                avg_factor=num_total_pos
+            )
+        else:
+            # IoU loss is disabled (weight=0) but still return for compatibility
+            loss_iou = loss_bbox.new_zeros(1)
+        
         # Handle NaN/Inf
         loss_cls = torch.nan_to_num(loss_cls)
         loss_bbox = torch.nan_to_num(loss_bbox)
+        loss_iou = torch.nan_to_num(loss_iou)
         
-        return loss_cls, loss_bbox
+        return loss_cls, loss_bbox, loss_iou
         
     def loss(self,
             gt_bboxes_list,
@@ -569,7 +584,7 @@ class BEVFormerHead(nn.Module):
             gt_bboxes_ignore for _ in range(num_dec_layers)
         ]
         
-        losses_cls, losses_bbox = multi_apply(
+        losses_cls, losses_bbox, losses_iou = multi_apply(
             self.loss_single, all_cls_scores, all_bbox_preds,
             all_gt_bboxes_list, all_gt_labels_list,
             all_gt_bboxes_ignore_list
@@ -580,12 +595,14 @@ class BEVFormerHead(nn.Module):
         # Loss from the last decoder layer
         loss_dict['loss_cls'] = losses_cls[-1]
         loss_dict['loss_bbox'] = losses_bbox[-1]
+        loss_dict['loss_iou'] = losses_iou[-1]
         
         # Loss from other decoder layers
         num_dec_layer = 0
-        for loss_cls_i, loss_bbox_i in zip(losses_cls[:-1], losses_bbox[:-1]):
+        for loss_cls_i, loss_bbox_i, loss_iou_i in zip(losses_cls[:-1], losses_bbox[:-1], losses_iou[:-1]):
             loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
             loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
+            loss_dict[f'd{num_dec_layer}.loss_iou'] = loss_iou_i
             num_dec_layer += 1
             
         return loss_dict
