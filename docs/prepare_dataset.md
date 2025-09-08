@@ -1,13 +1,19 @@
 
 
 ## NuScenes
-Download nuScenes V1.0 full dataset data  and CAN bus expansion data [HERE](https://www.nuscenes.org/download). Prepare nuscenes data by running
+Download nuScenes V1.0-mini dataset data  and CAN bus expansion data [HERE](https://www.nuscenes.org/download). Prepare nuscenes data by running
 
+```sh
+wget https://d36yt3mvayqw5m.cloudfront.net/public/v1.0/v1.0-mini.tgz
+# untar the folder to ./data
+```
 
 **Download CAN bus expansion**
-```
+```sh
 # download 'can_bus.zip'
-unzip can_bus.zip 
+wget https://d36yt3mvayqw5m.cloudfront.net/public/v1.0/can_bus.zip
+unzip can_bus.zip
+mv can_bus data/can_bus 
 # move can_bus to data dir
 ```
 
@@ -23,11 +29,8 @@ Using the above code will generate `nuscenes_infos_temporal_{train,val}.pkl`.
 **Folder structure**
 ```
 bevformer
-├── projects/
+├── reimplementation/
 ├── tools/
-├── configs/
-├── ckpts/
-│   ├── r101_dcn_fcos3d_pretrain.pth
 ├── data/
 │   ├── can_bus/
 │   ├── nuscenes/
