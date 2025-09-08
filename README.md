@@ -1,5 +1,5 @@
 # BEVFormer Pytorch
-The original bevformer [implementation](https://github.com/fundamentalvision/BEVFormer/network/members) uses torch 1.9 and a lot of mmcv stuff, which makes it very very hard to work with especially if you want to use latest version of pytorch. This repository is the implementation of bevformer in pytorch. If you are looking at this repo and find any isses please let me know.
+The original bevformer [implementation](https://github.com/fundamentalvision/BEVFormer) uses torch 1.9 and a lot of mmcv stuff, which makes it very very hard to work with especially if you want to use latest version of pytorch. This repository is the implementation of bevformer in pytorch. If you are looking at this repo and find any isses please let me know.
 
 ## Important Links
 
