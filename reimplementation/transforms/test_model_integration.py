@@ -12,22 +12,25 @@ import torch.optim as optim
 import numpy as np
 from typing import Dict, Any
 
-# Add the models directory to path to import our reimplemented model
-sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation/models')
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import our complete data pipeline
-from load_multi_view_image import LoadMultiViewImageFromFiles
-from normalize_multi_view_image import NormalizeMultiviewImage
-from photometricdistortion_multiview import PhotoMetricDistortionMultiViewImage
-from load_annotations_3d import LoadAnnotations3D
-from object_filters import ObjectNameFilter, ObjectRangeFilter
-from pad_multi_view_image import PadMultiViewImage
-from default_format_bundle_3d import DefaultFormatBundle3D
-from custom_collect_3d import CustomCollect3D
+from transforms import (
+    LoadMultiViewImageFromFiles,
+    NormalizeMultiviewImage,
+    PhotoMetricDistortionMultiViewImage,
+    LoadAnnotations3D,
+    ObjectNameFilter,
+    ObjectRangeFilter,
+    PadMultiViewImage,
+    DefaultFormatBundle3D,
+    CustomCollect3D
+)
 
 # Import our reimplemented BEVFormer model
 try:
-    from bevformer import BEVFormer
+    from models import BEVFormer
 except ImportError as e:
     print(f"❌ Could not import BEVFormer model: {e}")
     print("Please ensure all model components are properly implemented")

@@ -7,13 +7,7 @@ import torch
 import sys
 import os
 
-# Add current directory to path
-sys.path.append(os.path.dirname(__file__))
-
-from models.backbone import ResNetBackbone
-from models.neck import FPNNeck
-from models.spatial_attention import SpatialCrossAttention
-from reimplementation.models.bev_former_layer import BEVFormerEncoder
+from models import ResNetBackbone, FPNNeck, SpatialCrossAttention, BEVFormerEncoder
 
 
 def test_backbone():

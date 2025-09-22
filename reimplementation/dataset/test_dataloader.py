@@ -10,11 +10,11 @@ import torch.utils.data as data
 import numpy as np
 from typing import Dict, Any
 
-# Add current directory to path for imports
-sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation/dataset')
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from nuscenes_dataset import NuScenesDataset
-from collate_fn import custom_collate_fn, validate_batch
+from dataset import NuScenesDataset, custom_collate_fn
+from dataset.collate_fn import validate_batch
 
 
 def test_dataset_basic():
@@ -255,11 +255,9 @@ def test_memory_efficiency():
 def test_model_integration():
     """Test dataloader integration with BEVFormer model."""
     print("🔄 Testing model integration...")
-    
+
     try:
-        # Add model path
-        sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation/models')
-        from bevformer import BEVFormer
+        from models import BEVFormer
         
         data_file = '/home/irdali.durrani/po-pi/BEVFormer/reimplementation/data/nuscenes/nuscenes_infos_temporal_val.pkl'
         if not os.path.exists(data_file):

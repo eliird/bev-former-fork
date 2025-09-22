@@ -83,12 +83,9 @@ class PseudoSampler:
 def test_pseudo_sampler():
     """Test PseudoSampler functionality"""
     print("Testing PseudoSampler...")
-    
+
     # Import AssignResult for testing
-    import sys
-    import os
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from util import AssignResult
+    from ..util import AssignResult
     
     # Create mock assignment result
     num_queries = 10

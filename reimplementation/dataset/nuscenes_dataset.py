@@ -12,18 +12,18 @@ import torch
 from torch.utils.data import Dataset
 from typing import Dict, List, Optional, Any, Tuple
 
-# Add transforms to path
-sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation/transforms')
-
 # Import our reimplemented transforms
-from load_multi_view_image import LoadMultiViewImageFromFiles
-from normalize_multi_view_image import NormalizeMultiviewImage
-from photometricdistortion_multiview import PhotoMetricDistortionMultiViewImage
-from load_annotations_3d import LoadAnnotations3D
-from object_filters import ObjectNameFilter, ObjectRangeFilter
-from pad_multi_view_image import PadMultiViewImage
-from default_format_bundle_3d import DefaultFormatBundle3D
-from custom_collect_3d import CustomCollect3D
+from ..transforms import (
+    LoadMultiViewImageFromFiles,
+    NormalizeMultiviewImage,
+    PhotoMetricDistortionMultiViewImage,
+    LoadAnnotations3D,
+    ObjectNameFilter,
+    ObjectRangeFilter,
+    PadMultiViewImage,
+    DefaultFormatBundle3D,
+    CustomCollect3D
+)
 
 
 class NuScenesDataset(Dataset):

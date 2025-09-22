@@ -19,14 +19,8 @@ import torch.optim as optim
 import torch.utils.data as data
 from torch.utils.tensorboard import SummaryWriter
 
-# Add paths for our reimplementation
-sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation')
-sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation/models')
-sys.path.append('/home/irdali.durrani/po-pi/BEVFormer/reimplementation/dataset')
-
-from dataset.nuscenes_dataset import NuScenesDataset
-from dataset.collate_fn import custom_collate_fn
-from bevformer import BEVFormer
+from dataset import NuScenesDataset, custom_collate_fn
+from models import BEVFormer
 
 
 def setup_logging(log_dir: str, exp_name: str) -> logging.Logger:

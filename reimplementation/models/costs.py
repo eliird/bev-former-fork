@@ -3,7 +3,6 @@ from typing import Optional, Union
 import torch
 from GIoULoss import bbox_overlaps
 from torch import Tensor
-from mmdet.models.task_modules.assigners.match_cost import FocalLossCost
 
 def bbox_xyxy_to_cxcywh(bbox: Tensor) -> Tensor:
     """Convert bbox coordinates from (x1, y1, x2, y2) to (cx, cy, w, h).

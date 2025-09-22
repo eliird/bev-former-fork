@@ -27,9 +27,14 @@ import warnings
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-from spatial_attention import SpatialCrossAttention
-from tempral_attention import TemporalSelfAttention
-from deformable_attention import MSDeformableAttention3D
+try:
+    from .spatial_attention import SpatialCrossAttention
+    from .temporal_attention import TemporalSelfAttention
+    from .deformable_attention import MSDeformableAttention3D
+except ImportError:
+    from spatial_attention import SpatialCrossAttention
+    from temporal_attention import TemporalSelfAttention
+    from deformable_attention import MSDeformableAttention3D
 
 
 class FFN(nn.Module):

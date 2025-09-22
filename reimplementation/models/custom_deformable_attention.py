@@ -5,7 +5,7 @@ import warnings
 from deformable_attention import (
     MultiScaleDeformableAttnFunction_fp16, 
     MultiScaleDeformableAttnFunction_fp32, 
-    multi_scale_deformable_attn_pytorch, 
+    multi_scale_deformable_attn, 
     _pure_pytorch_deformable_attn,
     MMCV_CUDA_AVAILABLE,
     MMCV_PYTORCH_AVAILABLE

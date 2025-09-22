@@ -4,17 +4,17 @@ import torch
 
 try:
     from .deformable_attention import (
-        MultiScaleDeformableAttnFunction_fp16, 
+        MultiScaleDeformableAttnFunction_fp16,
         MultiScaleDeformableAttnFunction_fp32,
-        multi_scale_deformable_attn_pytorch,
+        multi_scale_deformable_attn,
         _pure_pytorch_deformable_attn,
         MMCV_CUDA_AVAILABLE, MMCV_PYTORCH_AVAILABLE
     )
 except ImportError:
     from deformable_attention import (
-        MultiScaleDeformableAttnFunction_fp16, 
+        MultiScaleDeformableAttnFunction_fp16,
         MultiScaleDeformableAttnFunction_fp32,
-        multi_scale_deformable_attn_pytorch,
+        multi_scale_deformable_attn,
         _pure_pytorch_deformable_attn,
         MMCV_CUDA_AVAILABLE, MMCV_PYTORCH_AVAILABLE
     )
@@ -222,7 +222,7 @@ class TemporalSelfAttention(nn.Module):
                 value, spatial_shapes, level_start_index, sampling_locations,
                 attention_weights, self.im2col_step)
         elif MMCV_PYTORCH_AVAILABLE:
-            output = multi_scale_deformable_attn_pytorch(
+            output = multi_scale_deformable_attn(
                 value, spatial_shapes, sampling_locations, attention_weights)
         else:
             output = _pure_pytorch_deformable_attn(
