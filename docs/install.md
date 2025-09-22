@@ -4,42 +4,42 @@ Following https://mmdetection3d.readthedocs.io/en/latest/getting_started.html#in
 
 
 
-**a. Create a conda virtual environment and activate it.**
+**a. Create a virtual environment**
 ```shell
-conda create -n open-mmlab python=3.10 -y
-conda activate open-mmlab
+python3 -m venv .venv
+. .venv/bin/activate
 ```
 
 **b. Install PyTorch and torchvision following the [official instructions](https://pytorch.org/).**
 ```shell
 pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
-# Recommended torch>=1.9
-
-```
-
-**c. Install gcc>=5 in conda env (optional).**
-```shell
-conda install -c omgarcia gcc-6 # gcc-6.2
 ```
 
 **c. Install mmcv-full.**
+
+we use mmcv for dataset prepartion and some custom kernels for losses
+
 ```shell
-# we only need mmcv for some of the custom kernels for speedup will work without it as well
-pip install mim
+
+pip install openmim
 mim install mmengine
 mim install mmcv
-# mim install mmdet
-# mim install mmdet3d
-# pip install "mmsegmentation>=1.0.0"
+
+
+# mim trouble shooting
+# if you get any parsing or python libraries error mim for some reason decreaase the setup tools version reupgrade it 
+python -m ensurepip --upgrade
+python -m pip install --upgrade setuptools
+
 ```
 
-**f. Install Detectron2 and Timm.**
+<!-- **f. Install Detectron2 and Timm.**
 ```shell
 pip install einops fvcore seaborn iopath==0.1.9 timm==0.6.13  typing-extensions==4.5.0 pylint ipython==8.12  numpy==1.19.5 matplotlib==3.5.2 numba==0.48.0 pandas==1.4.4 scikit-image==0.19.3 setuptools==59.5.0
 python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 ```
-
+ -->
 
 **g. Clone BEVFormer.**
 ```
