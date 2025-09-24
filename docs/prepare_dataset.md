@@ -24,7 +24,7 @@ mv can_bus data/can_bus
 # python tools/create_data.py nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes --version v1.0-mini --canbus ./data
 
 # remove them version flag in case you are using full dataset
-python tools/create_data.py nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes  --canbus ./data
+python reimplementation/tools/create_data.py nuscenes --root-path ./data/nuscenes --out-dir ./data/nuscenes --extra-tag nuscenes  --canbus ./data
 ```
 
 Using the above code will generate `nuscenes_infos_temporal_{train,val}.pkl`.
