@@ -177,8 +177,9 @@ def get_available_scenes(nusc):
     """
     available_scenes = []
     print(f'Total scenes: {len(nusc.scene)}')
+    print('Checking scene availability...')
 
-    for scene in nusc.scene:
+    for scene in tqdm(nusc.scene, desc="Validating scenes"):
         scene_token = scene['token']
         scene_rec = nusc.get('scene', scene_token)
         sample_rec = nusc.get('sample', scene_rec['first_sample_token'])
