@@ -43,7 +43,9 @@ class LoadAnnotations3D:
         ]
         
         # Mapping from nuScenes GT names to class indices
+        # Support both full nuScenes names and short names
         self.name_to_class = {
+            # Full nuScenes names
             'vehicle.car': 0,
             'vehicle.truck': 1,
             'vehicle.construction': 2,
@@ -53,14 +55,25 @@ class LoadAnnotations3D:
             'vehicle.motorcycle': 6,
             'vehicle.bicycle': 7,
             'human.pedestrian.adult': 8,
-            'human.pedestrian.child': 8,  # Map child to adult
+            'human.pedestrian.child': 8,
             'human.pedestrian.wheelchair': 8,
             'human.pedestrian.stroller': 8,
             'human.pedestrian.personal_mobility': 8,
             'human.pedestrian.police_officer': 8,
             'human.pedestrian.construction_worker': 8,
             'movable_object.trafficcone': 9,
-            'movable_object.pushable_pullable': 5,  # Map to barrier
+            'movable_object.pushable_pullable': 5,
+            # Short names (used in our processed data)
+            'car': 0,
+            'truck': 1,
+            'construction_vehicle': 2,
+            'bus': 3,
+            'trailer': 4,
+            'barrier': 5,
+            'motorcycle': 6,
+            'bicycle': 7,
+            'pedestrian': 8,
+            'traffic_cone': 9,
         }
     
     def _load_bboxes_3d(self, results: Dict[str, Any]) -> Dict[str, Any]:

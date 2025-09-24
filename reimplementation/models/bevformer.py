@@ -12,10 +12,16 @@ import numpy as np
 import time
 
 # Import our reimplemented modules
-from .backbone import ResNetBackbone
-from .neck import FPNNeck  
-from .bevformer_head import BEVFormerHead
-from .grid_mask import GridMask
+try:
+    from .backbone import ResNetBackbone
+    from .neck import FPNNeck  
+    from .bevformer_head import BEVFormerHead
+    from .grid_mask import GridMask
+except ImportError:
+    from backbone import ResNetBackbone
+    from neck import FPNNeck  
+    from bevformer_head import BEVFormerHead
+    from grid_mask import GridMask
 
 
 def bbox3d2result(bboxes, scores, labels):

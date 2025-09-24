@@ -392,19 +392,26 @@ class BEVFormerHead(nn.Module):
         neg_inds = sampling_result.neg_inds
         
         # Label targets
-        labels = gt_bboxes.new_full(
-            (num_bboxes,), self.num_classes, dtype=torch.long
+        # For sigmoid focal loss, background should be all zeros (multi-label format)
+        # not a separate background class
+        labels = gt_bboxes.new_zeros(
+            (num_bboxes, self.num_classes), dtype=torch.float32
         )
-        labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds]
+        # Set positive samples to 1 for their corresponding class
+        if len(pos_inds) > 0:
+            pos_labels = gt_labels[sampling_result.pos_assigned_gt_inds]
+            labels[pos_inds, pos_labels] = 1.0
         label_weights = gt_bboxes.new_ones(num_bboxes)
         
         # Bbox targets
         bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_c]
         bbox_weights = torch.zeros_like(bbox_pred)
         bbox_weights[pos_inds] = 1.0
-        
+
         # DETR style: directly use GT boxes as targets
-        bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
+        if len(pos_inds) > 0:
+            bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
+
         
         return (labels, label_weights, bbox_targets, bbox_weights,
                 pos_inds, neg_inds)
