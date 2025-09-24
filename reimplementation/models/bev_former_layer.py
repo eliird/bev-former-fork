@@ -32,9 +32,9 @@ try:
     from .temporal_attention import TemporalSelfAttention
     from .deformable_attention import MSDeformableAttention3D
 except ImportError:
-    from spatial_attention import SpatialCrossAttention
-    from temporal_attention import TemporalSelfAttention
-    from deformable_attention import MSDeformableAttention3D
+    from .spatial_attention import SpatialCrossAttention
+    from .temporal_attention import TemporalSelfAttention
+    from .deformable_attention import MSDeformableAttention3D
 
 
 class FFN(nn.Module):

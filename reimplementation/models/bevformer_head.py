@@ -6,19 +6,19 @@ import copy
 import numpy as np
 
 # Import our reimplemented modules
-from perception_transformer import PerceptionTransformer
-from learned_positional_encoding import LearnedPositionalEncoding
-from nms_coder import NMSFreeCoder
-from hungarian_assigner import HungarianAssigner3D
-from focal_loss import FocalLoss
-from l1_loss import L1Loss
-from GIoULoss import GIoULoss
-from pseudo_sampler import PseudoSampler
-from utils_bevhead import (
+from .perception_transformer import PerceptionTransformer
+from .learned_positional_encoding import LearnedPositionalEncoding
+from .nms_coder import NMSFreeCoder
+from .hungarian_assigner import HungarianAssigner3D
+from .focal_loss import FocalLoss
+from .l1_loss import L1Loss
+from .GIoULoss import GIoULoss
+from .pseudo_sampler import PseudoSampler
+from .utils_bevhead import (
     multi_apply, reduce_mean, bias_init_with_prob, 
     inverse_sigmoid, normalize_bbox
 )
-from costs import FocalLossCost, BBox3DL1Cost, IoUCost
+from .costs import FocalLossCost, BBox3DL1Cost, IoUCost
 
 
 class BEVFormerHead(nn.Module):

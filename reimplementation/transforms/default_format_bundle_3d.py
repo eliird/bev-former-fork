@@ -7,7 +7,7 @@ Based on Pack3DDetInputs functionality from MMDetection3D
 import numpy as np
 import torch
 from typing import Dict, List, Optional, Union, Any, Tuple, Sequence
-from structures import LiDARInstance3DBoxes
+from .structures import LiDARInstance3DBoxes
 
 
 class DefaultFormatBundle3D:

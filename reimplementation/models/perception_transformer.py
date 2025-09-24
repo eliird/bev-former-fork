@@ -61,8 +61,8 @@ import torch
 import torch.nn as nn
 from torchvision.transforms.functional import rotate
 from torch.cuda.amp import autocast
-from bev_former_encoder import BEVFormerEncoder
-from detection_transformer_decoder import DetectionTransformerDecoder
+from .bev_former_encoder import BEVFormerEncoder
+from .detection_transformer_decoder import DetectionTransformerDecoder
 
 
 class PerceptionTransformer(nn.Module):

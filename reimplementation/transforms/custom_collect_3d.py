@@ -7,7 +7,7 @@ Based on the reference implementation from transform_3d.py
 import numpy as np
 import torch
 from typing import Dict, List, Optional, Union, Any, Sequence
-from structures import LiDARInstance3DBoxes
+from .structures import LiDARInstance3DBoxes
 
 
 class CustomCollect3D:

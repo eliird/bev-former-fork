@@ -92,7 +92,7 @@ class LoadAnnotations3D:
         
         # Create bounding box container based on type
         if self.box_type_3d == 'LiDAR':
-            from structures import LiDARInstance3DBoxes
+            from .structures import LiDARInstance3DBoxes
             gt_bboxes_3d = LiDARInstance3DBoxes(gt_boxes)
         else:
             # For now, just use tensor format

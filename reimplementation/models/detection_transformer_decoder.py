@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from detr_decoder_layer import DetrTransformerDecoderLayer
+from .detr_decoder_layer import DetrTransformerDecoderLayer
 
 
 def inverse_sigmoid(x, eps=1e-5):

@@ -13,17 +13,14 @@ from torch.utils.data import Dataset
 from typing import Dict, List, Optional, Any, Tuple
 
 # Import our reimplemented transforms
-from ..transforms import (
-    LoadMultiViewImageFromFiles,
-    NormalizeMultiviewImage,
-    PhotoMetricDistortionMultiViewImage,
-    LoadAnnotations3D,
-    ObjectNameFilter,
-    ObjectRangeFilter,
-    PadMultiViewImage,
-    DefaultFormatBundle3D,
-    CustomCollect3D
-)
+from transforms.load_multi_view_image import LoadMultiViewImageFromFiles
+from transforms.normalize_multi_view_image import NormalizeMultiviewImage
+from transforms.photometricdistortion_multiview import PhotoMetricDistortionMultiViewImage
+from transforms.load_annotations_3d import LoadAnnotations3D
+from transforms.object_filters import ObjectNameFilter, ObjectRangeFilter
+from transforms.pad_multi_view_image import PadMultiViewImage
+from transforms.default_format_bundle_3d import DefaultFormatBundle3D
+from transforms.custom_collect_3d import CustomCollect3D
 
 
 class NuScenesDataset(Dataset):

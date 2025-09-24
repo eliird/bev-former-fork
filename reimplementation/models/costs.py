@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from typing import Optional, Union
 import torch
-from GIoULoss import bbox_overlaps
+from .GIoULoss import bbox_overlaps
 from torch import Tensor
 
 def bbox_xyxy_to_cxcywh(bbox: Tensor) -> Tensor:

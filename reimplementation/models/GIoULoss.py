@@ -4,7 +4,7 @@ import torch.nn as nn
 from torch import Tensor
 import torch
 
-from l1_loss import weighted_loss
+from .l1_loss import weighted_loss
 
 
 

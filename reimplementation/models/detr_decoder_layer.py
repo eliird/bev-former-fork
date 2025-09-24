@@ -1,8 +1,8 @@
 import torch.nn as nn
 import torch
 from torch import Tensor
-from multi_head_attention import MultiheadAttention
-from custom_deformable_attention import CustomMSDeformableAttention
+from .multi_head_attention import MultiheadAttention
+from .custom_deformable_attention import CustomMSDeformableAttention
 
 
 class FFN(nn.Module):

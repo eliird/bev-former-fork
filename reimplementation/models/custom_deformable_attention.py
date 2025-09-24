@@ -2,7 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import warnings
-from deformable_attention import (
+from .deformable_attention import (
     MultiScaleDeformableAttnFunction_fp16, 
     MultiScaleDeformableAttnFunction_fp32, 
     multi_scale_deformable_attn, 

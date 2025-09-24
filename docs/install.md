@@ -12,9 +12,9 @@ python3 -m venv .venv
 
 **b. Install PyTorch and torchvision following the [official instructions](https://pytorch.org/).**
 ```shell
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 
-pip install scipy pyquaternion nuscenes-devkit tqdm shapely
+pip install scipy pyquaternion nuscenes-devkit tqdm shapely tensorboard
 
 ```
 

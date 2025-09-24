@@ -115,7 +115,16 @@ class LoadMultiViewImageFromFiles:
                 raise KeyError(f"'data_path' not found for camera {cam_name}")
             
             filepath = cam_info['data_path']
-            
+
+            # Check if file exists, if not try to construct correct path
+            if not os.path.exists(filepath):
+                # Try to construct path relative to data directory
+                # This handles case where we're running from reimplementation directory
+                # but paths in pickle are relative to root directory
+                alt_filepath = os.path.join('..', filepath)
+                if os.path.exists(alt_filepath):
+                    filepath = alt_filepath
+
             # Load image
             img = self._load_single_image(filepath)
             imgs.append(img)

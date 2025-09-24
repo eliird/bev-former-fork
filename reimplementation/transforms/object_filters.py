@@ -6,7 +6,7 @@ Filters objects by class names and spatial ranges
 import numpy as np
 import torch
 from typing import Dict, List, Any
-from structures import LiDARInstance3DBoxes
+from .structures import LiDARInstance3DBoxes
 
 
 class ObjectNameFilter:

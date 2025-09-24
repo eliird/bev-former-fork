@@ -21,7 +21,7 @@ def run_training_example(config_name: str):
     # Different training configurations
     configs = {
         'quick_test': [
-            '--data_root', '/home/irdali.durrani/po-pi/BEVFormer/reimplementation/data/nuscenes',
+            '--data_root', '../data/nuscenes',
             '--train_pkl', 'nuscenes_infos_temporal_val.pkl',  # Use val as train for quick test
             '--val_pkl', 'nuscenes_infos_temporal_val.pkl',
             '--batch_size', '2',
@@ -33,7 +33,7 @@ def run_training_example(config_name: str):
             '--exp_name', 'quick_test'
         ],
         'small_training': [
-            '--data_root', '/home/irdali.durrani/po-pi/BEVFormer/reimplementation/data/nuscenes',
+            '--data_root', '../data/nuscenes',
             '--train_pkl', 'nuscenes_infos_temporal_train.pkl',
             '--val_pkl', 'nuscenes_infos_temporal_val.pkl',
             '--batch_size', '2',
@@ -46,7 +46,7 @@ def run_training_example(config_name: str):
             '--exp_name', 'small_training'
         ],
         'full_training': [
-            '--data_root', '/home/irdali.durrani/po-pi/BEVFormer/reimplementation/data/nuscenes',
+            '--data_root', '../data/nuscenes',
             '--train_pkl', 'nuscenes_infos_temporal_train.pkl',
             '--val_pkl', 'nuscenes_infos_temporal_val.pkl',
             '--batch_size', '4',
@@ -77,7 +77,7 @@ def run_training_example(config_name: str):
     
     # Run the training
     try:
-        result = subprocess.run(cmd, cwd='/home/irdali.durrani/po-pi/BEVFormer/reimplementation')
+        result = subprocess.run(cmd)
         return result.returncode == 0
     except KeyboardInterrupt:
         print("\nTraining interrupted by user")

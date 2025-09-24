@@ -1,7 +1,7 @@
 import torch
 
-from costs import FocalLossCost, BBox3DL1Cost, IoUCost, MockInstanceData
-from util import AssignResult
+from .costs import FocalLossCost, BBox3DL1Cost, IoUCost, MockInstanceData
+from .util import AssignResult
 try:
     from scipy.optimize import linear_sum_assignment
 except ImportError:

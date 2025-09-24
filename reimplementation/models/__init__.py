@@ -13,13 +13,13 @@ from .detection_transformer_decoder import DetectionTransformerDecoder
 from .detr_decoder_layer import DetrTransformerDecoderLayer
 from .spatial_attention import SpatialCrossAttention
 from .temporal_attention import TemporalSelfAttention
-from .multi_head_attention import MultiHeadAttention
+from .multi_head_attention import MultiheadAttention
 from .deformable_attention import MSDeformableAttention3D
-from .custom_deformable_attention import CustomMSDeformableAttention3D
+from .custom_deformable_attention import CustomMSDeformableAttention
 from .pseudo_sampler import PseudoSampler
-from .task_aligned_assigner import TaskAlignedAssigner
-from .bbox_coder import NMSFreeCoder
-from .positional_encoding import PositionalEncoding, LearnedPositionalEncoding
+from .hungarian_assigner import HungarianAssigner3D
+from .nms_coder import NMSFreeCoder
+from .learned_positional_encoding import LearnedPositionalEncoding
 
 __all__ = [
     'ResNetBackbone',
@@ -32,12 +32,11 @@ __all__ = [
     'DetrTransformerDecoderLayer',
     'SpatialCrossAttention',
     'TemporalSelfAttention',
-    'MultiHeadAttention',
+    'MultiheadAttention',
     'MSDeformableAttention3D',
-    'CustomMSDeformableAttention3D',
+    'CustomMSDeformableAttention',
     'PseudoSampler',
-    'TaskAlignedAssigner',
+    'HungarianAssigner3D',
     'NMSFreeCoder',
-    'PositionalEncoding',
     'LearnedPositionalEncoding'
 ]

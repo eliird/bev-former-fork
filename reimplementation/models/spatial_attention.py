@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torch
-from deformable_attention import MSDeformableAttention3D
+from .deformable_attention import MSDeformableAttention3D
 
 class SpatialCrossAttention(nn.Module):
     """An attention module used in BEVFormer.

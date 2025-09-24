@@ -31,7 +31,7 @@ encoder=dict(
 
 import torch
 import torch.nn as nn
-from bev_former_layer import BEVFormerLayer
+from .bev_former_layer import BEVFormerLayer
 
 
 class BEVFormerEncoder(nn.Module):
