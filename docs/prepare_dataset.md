@@ -4,17 +4,9 @@
 Download nuScenes V1.0-mini dataset data  and CAN bus expansion data [HERE](https://www.nuscenes.org/download). Prepare nuscenes data by running
 
 ```sh
-wget https://d36yt3mvayqw5m.cloudfront.net/public/v1.0/v1.0-mini.tgz
+bash download_dataset.sh
+bash extract_dataset.sh
 # untar the folder to ./data
-```
-
-**Download CAN bus expansion**
-```sh
-# download 'can_bus.zip'
-wget https://d36yt3mvayqw5m.cloudfront.net/public/v1.0/can_bus.zip
-unzip can_bus.zip
-mv can_bus data/can_bus 
-# move can_bus to data dir
 ```
 
 **Prepare nuScenes data**
@@ -44,4 +36,12 @@ bevformer
 |   |   ├── v1.0-trainval/
 |   |   ├── nuscenes_infos_temporal_train.pkl
 |   |   ├── nuscenes_infos_temporal_val.pkl
+```
+
+
+**Test Quick Training**
+
+```sh
+cd reimplementation
+python example_training.py quick_test
 ```
