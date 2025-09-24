@@ -77,6 +77,10 @@ def parse_args():
     parser.add_argument('--extra-tag', type=str, default='nuscenes')
     parser.add_argument(
         '--workers', type=int, default=4, help='number of threads to be used')
+    parser.add_argument(
+        '--include-test',
+        action='store_true',
+        help='Include test set processing (requires v1.0-test data)')
     return parser.parse_args()
 
 
@@ -111,7 +115,7 @@ def main():
             out_dir=args.out_dir,
             max_sweeps=args.max_sweeps)
     else:
-        # For full dataset, process train-val and test separately
+        # For full dataset, process train-val
         train_version = f'{args.version}-trainval'
         print(f"\nProcessing {train_version}...")
         nuscenes_data_prep(
@@ -123,16 +127,24 @@ def main():
             out_dir=args.out_dir,
             max_sweeps=args.max_sweeps)
 
-        test_version = f'{args.version}-test'
-        print(f"\nProcessing {test_version}...")
-        nuscenes_data_prep(
-            root_path=args.root_path,
-            can_bus_root_path=args.canbus,
-            info_prefix=args.extra_tag,
-            version=test_version,
-            dataset_name='NuScenesDataset',
-            out_dir=args.out_dir,
-            max_sweeps=args.max_sweeps)
+        # Only process test if explicitly requested
+        if args.include_test:
+            test_version = f'{args.version}-test'
+            print(f"\nProcessing {test_version}...")
+            try:
+                nuscenes_data_prep(
+                    root_path=args.root_path,
+                    can_bus_root_path=args.canbus,
+                    info_prefix=args.extra_tag,
+                    version=test_version,
+                    dataset_name='NuScenesDataset',
+                    out_dir=args.out_dir,
+                    max_sweeps=args.max_sweeps)
+            except AssertionError as e:
+                print(f"⚠️  Warning: Test dataset not found. Skipping test set processing.")
+                print(f"   If you need test set, download v1.0-test data and use --include-test flag")
+        else:
+            print("\n📝 Note: Skipping test set processing (use --include-test flag if needed)")
 
     print("\n✅ Data preparation completed!")
 
