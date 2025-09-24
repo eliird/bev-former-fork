@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from dataset import NuScenesDataset, custom_collate_fn
 from models import BEVFormer
 from utils.config_parser import load_config
+from evaluation import calculate_nds_map, extract_detections_from_model_output
 
 
 def setup_logging(log_dir: str, exp_name: str) -> logging.Logger:
@@ -264,81 +265,190 @@ def save_checkpoint(model, optimizer, scheduler, epoch, iteration, best_loss, ch
 
 
 def validate(model, val_loader, logger, writer, epoch, config):
-    """Run validation."""
+    """Run validation with sequential scene processing."""
     model.eval()
     total_loss = 0.0
     val_losses = {}
 
+    # Check if we should compute NDS/mAP metrics
+    compute_metrics = config.get('evaluation', {}).get('compute_metrics', False)
+    predictions = [] if compute_metrics else None
+    ground_truths = [] if compute_metrics else None
+
     # Get max evaluation samples from config
     max_eval_samples = config.get('evaluation', {}).get('max_eval_samples', -1)
     if max_eval_samples > 0 and max_eval_samples < len(val_loader):
-        logger.info(f"Running validation on {max_eval_samples} random samples...")
+        logger.info(f"Running validation on {max_eval_samples} sequential samples...")
     else:
         max_eval_samples = len(val_loader)
         logger.info("Running validation on all samples...")
 
+    if compute_metrics:
+        logger.info("Computing NDS and mAP metrics with sequential scene processing...")
+
     with torch.no_grad():
-        # Create random indices if we're using a subset
-        if max_eval_samples < len(val_loader):
-            import random
-            val_indices = random.sample(range(len(val_loader)), max_eval_samples)
-            val_indices.sort()  # Keep some order for consistent logging
-        else:
-            val_indices = range(len(val_loader))
+        # Process sequential batches (much simpler and more efficient)
+        batches_to_process = min(max_eval_samples, len(val_loader))
+        logger.info(f"Processing first {batches_to_process} batches sequentially")
 
         processed_batches = 0
-        for batch_idx_in_loader, batch in enumerate(val_loader):
-            # Skip this batch if it's not in our selected indices
-            if max_eval_samples < len(val_loader) and batch_idx_in_loader not in val_indices:
+        current_scene_token = None
+
+        # Reset temporal state at start
+        model.prev_frame_info = {'prev_bev': None, 'scene_token': None, 'prev_pos': 0, 'prev_angle': 0}
+
+        for batch_idx, batch_data in enumerate(val_loader):
+            if batch_idx >= batches_to_process:
+                break
+
+            try:
+                # Check if GT data is available
+                if 'gt_bboxes_3d' not in batch_data or 'gt_labels_3d' not in batch_data:
+                    logger.warning(f"Validation batch {batch_idx} missing GT data, skipping...")
+                    continue
+
+                # Move batch to GPU
+                if torch.cuda.is_available():
+                    batch_img = batch_data['img'].cuda()
+                    batch_gt_bboxes_3d = [bbox.cuda() for bbox in batch_data['gt_bboxes_3d']]
+                    batch_gt_labels_3d = [labels.cuda() for labels in batch_data['gt_labels_3d']]
+                else:
+                    batch_img = batch_data['img']
+                    batch_gt_bboxes_3d = batch_data['gt_bboxes_3d']
+                    batch_gt_labels_3d = batch_data['gt_labels_3d']
+
+                # Forward pass for loss calculation
+                losses = model.forward_train(
+                    img=batch_img,
+                    img_metas=batch_data['img_metas'],
+                    gt_bboxes_3d=batch_gt_bboxes_3d,
+                    gt_labels_3d=batch_gt_labels_3d
+                )
+
+                # Accumulate losses
+                batch_total_loss = 0
+                for key, value in losses.items():
+                    if torch.is_tensor(value):
+                        loss_val = value.item()
+                        batch_total_loss += loss_val
+
+                        if key not in val_losses:
+                            val_losses[key] = 0.0
+                        val_losses[key] += loss_val
+
+                total_loss += batch_total_loss
+
+                # Sequential inference for metrics calculation
+                if compute_metrics:
+                    try:
+                        # Process each sample in the batch sequentially
+                        batch_size = batch_img.size(0)
+                        queue_length = batch_img.size(1)
+
+                        for sample_idx in range(batch_size):
+                            # Extract current frame for this sample
+                            # Shape: [queue_len, num_cams, C, H, W] -> [num_cams, C, H, W]
+                            current_img = batch_img[sample_idx, -1, ...]  # Last frame in temporal sequence
+
+                            # Extract current frame meta
+                            current_meta = batch_data['img_metas'][sample_idx][queue_length - 1]
+
+                            # Check for scene change
+                            scene_token = current_meta.get('scene_token')
+                            if scene_token != current_scene_token:
+                                # New scene - reset temporal state
+                                model.prev_frame_info = {'prev_bev': None, 'scene_token': scene_token, 'prev_pos': 0, 'prev_angle': 0}
+                                current_scene_token = scene_token
+
+                            # Forward test with proper format
+                            model_output = model.forward_test(
+                                img=[current_img],  # List of 4D tensor
+                                img_metas=[[current_meta]]  # List of single meta dict
+                            )
+
+                            # Extract detections
+                            detections = extract_detections_from_model_output(model_output)
+                            predictions.append(detections)
+
+                            # Clear GPU cache after each forward_test to prevent OOM
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+
+                            # Process ground truths for this sample
+                            if len(batch_gt_bboxes_3d) > sample_idx and len(batch_gt_labels_3d) > sample_idx:
+                                gt_dict = {
+                                    'gt_bboxes_3d': batch_gt_bboxes_3d[sample_idx],
+                                    'gt_labels_3d': batch_gt_labels_3d[sample_idx]
+                                }
+                                ground_truths.append(gt_dict)
+                            else:
+                                # Empty ground truth
+                                gt_dict = {
+                                    'gt_bboxes_3d': torch.zeros((0, 9)),
+                                    'gt_labels_3d': torch.zeros(0, dtype=torch.long)
+                                }
+                                ground_truths.append(gt_dict)
+
+                        # Clear GPU cache after each batch to prevent memory buildup
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                    except Exception as e:
+                        logger.warning(f"Error collecting predictions for batch {batch_idx}: {e}")
+                        # Clear GPU cache even on error
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                        # Add empty prediction/GT to keep lists aligned
+                        if compute_metrics:
+                            predictions.append({
+                                'boxes_3d': torch.zeros((0, 9)),
+                                'scores_3d': torch.zeros(0),
+                                'labels_3d': torch.zeros(0, dtype=torch.long)
+                            })
+                            ground_truths.append({
+                                'gt_bboxes_3d': torch.zeros((0, 9)),
+                                'gt_labels_3d': torch.zeros(0, dtype=torch.long)
+                            })
+
+                val_log_interval = config.get('logging', {}).get('val_log_interval', 50)
+                if batch_idx % val_log_interval == 0:
+                    logger.info(f"Validation batch {batch_idx}: loss={batch_total_loss:.4f}")
+
+                processed_batches += 1
+
+            except Exception as e:
+                logger.warning(f"Error processing batch {batch_idx}: {e}")
                 continue
-
-            batch_idx = processed_batches  # Use processed batch count for logging
-            # Check if GT data is available
-            if 'gt_bboxes_3d' not in batch or 'gt_labels_3d' not in batch:
-                logger.warning(f"Validation batch {batch_idx} missing GT data, skipping...")
-                continue
-
-            # Move batch to GPU
-            if torch.cuda.is_available():
-                batch_img = batch['img'].cuda()
-                batch_gt_bboxes_3d = [bbox.cuda() for bbox in batch['gt_bboxes_3d']]
-                batch_gt_labels_3d = [labels.cuda() for labels in batch['gt_labels_3d']]
-            else:
-                batch_img = batch['img']
-                batch_gt_bboxes_3d = batch['gt_bboxes_3d']
-                batch_gt_labels_3d = batch['gt_labels_3d']
-
-            # Forward pass
-            losses = model.forward_train(
-                img=batch_img,
-                img_metas=batch['img_metas'],
-                gt_bboxes_3d=batch_gt_bboxes_3d,
-                gt_labels_3d=batch_gt_labels_3d
-            )
-
-            # Accumulate losses
-            batch_total_loss = 0
-            for key, value in losses.items():
-                if torch.is_tensor(value):
-                    loss_val = value.item()
-                    batch_total_loss += loss_val
-
-                    if key not in val_losses:
-                        val_losses[key] = 0.0
-                    val_losses[key] += loss_val
-
-            total_loss += batch_total_loss
-
-            val_log_interval = config.get('logging', {}).get('val_log_interval', 50)
-            if batch_idx % val_log_interval == 0:
-                logger.info(f"Validation batch {batch_idx}/{max_eval_samples}: loss={batch_total_loss:.4f}")
-
-            processed_batches += 1
 
     # Average losses
     avg_total_loss = total_loss / processed_batches if processed_batches > 0 else 0.0
     for key in val_losses:
         val_losses[key] /= processed_batches
+
+    # Calculate metrics if enabled
+    metrics_results = {}
+    if compute_metrics and predictions and ground_truths:
+        class_names = config.get('data', {}).get('class_names', [])
+        distance_thresholds = config.get('evaluation', {}).get('distance_thresholds', [0.5, 1.0, 2.0, 4.0])
+
+        logger.info("Computing NDS and mAP metrics...")
+        try:
+            metrics_results = calculate_nds_map(
+                predictions,
+                ground_truths,
+                class_names,
+                distance_thresholds
+            )
+            logger.info(f"Validation Metrics:")
+            logger.info(f"  NDS: {metrics_results['NDS']:.4f}")
+            logger.info(f"  mAP: {metrics_results['mAP']:.4f}")
+
+            # Log per-class AP if available
+            if 'per_class_AP' in metrics_results:
+                for class_name, ap in metrics_results['per_class_AP'].items():
+                    logger.info(f"  {class_name}_AP: {ap:.4f}")
+        except Exception as e:
+            logger.warning(f"Failed to compute metrics: {e}")
 
     logger.info(f"Validation Results (processed {processed_batches} batches):")
     logger.info(f"  Total Loss: {avg_total_loss:.4f}")
@@ -350,6 +460,16 @@ def validate(model, val_loader, logger, writer, epoch, config):
         writer.add_scalar('val/total_loss', avg_total_loss, epoch)
         for key, value in val_losses.items():
             writer.add_scalar(f'val/{key}', value, epoch)
+
+        # Log metrics to TensorBoard
+        if metrics_results:
+            writer.add_scalar('val/NDS', metrics_results['NDS'], epoch)
+            writer.add_scalar('val/mAP', metrics_results['mAP'], epoch)
+
+            # Log per-class AP
+            if 'per_class_AP' in metrics_results:
+                for class_name, ap in metrics_results['per_class_AP'].items():
+                    writer.add_scalar(f'val/{class_name}_AP', ap, epoch)
 
     model.train()
     return avg_total_loss
@@ -577,6 +697,8 @@ def main():
 
     for epoch in range(start_epoch, epochs):
         # Train epoch
+        avg_val_loss = validate(model, val_loader, logger, writer, epoch, config)
+
         avg_train_loss = train_epoch(model, train_loader, optimizer, scheduler, epoch, logger, writer, config)
 
         # Validation

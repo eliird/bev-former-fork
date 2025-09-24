@@ -112,8 +112,10 @@ training:
 # Evaluation Configuration
 evaluation:
   eval_interval: 2  # More frequent for tiny model
-  eval_start_epoch: 1
-  max_eval_samples: 500  # Subset for faster validation
+  eval_start_epoch: 0
+  max_eval_samples: 20  # Subset for faster validation
+  compute_metrics: true  # Enable NDS/mAP calculation
+  distance_thresholds: [0.5, 1.0, 2.0, 4.0]  # Distance thresholds for matching
 
 # Logging Configuration
 logging:

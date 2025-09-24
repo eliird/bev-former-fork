@@ -1,11 +1,8 @@
-"""Evaluation system for BEVFormer"""
+"""Simple evaluation system for BEVFormer"""
 
-from .evaluator import BEVFormerEvaluator
-from .nuscenes_metrics import NuScenesMetrics
-from .visualization import ResultVisualizer
+from .simple_metrics import calculate_nds_map, extract_detections_from_model_output
 
 __all__ = [
-    'BEVFormerEvaluator',
-    'NuScenesMetrics',
-    'ResultVisualizer'
+    'calculate_nds_map',
+    'extract_detections_from_model_output'
 ]
