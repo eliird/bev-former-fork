@@ -1,24 +1,45 @@
 # BEVFormer Training
 
-Simple training script for BEVFormer 3D object detection on nuScenes dataset.
+Training infrastructure for BEVFormer 3D object detection on nuScenes dataset.
 
-## Training
+## Usage
 
+### Single GPU Training
 ```bash
-python train_yaml.py --config configs/bevformer_tiny_clean.yaml --exp-name my_experiment
+python train_single_gpu.py --config configs/bevformer_tiny_clean.yaml
 ```
 
-### Arguments
+### Multi-GPU Training (4 GPUs)
+```bash
+torchrun --nproc_per_node=4 train_multi_gpu.py --config configs/bevformer_tiny_clean.yaml
+```
+
+### With Custom Experiment Name
+```bash
+python train_single_gpu.py --config configs/bevformer_tiny_clean.yaml --exp-name my_experiment
+```
+
+### Resume Training
+```bash
+python train_single_gpu.py --config configs/bevformer_tiny_clean.yaml --resume checkpoints/my_exp/best_model.pth
+```
+
+## Arguments
 
 - `--config`: Path to YAML configuration file (required)
-- `--exp-name`: Experiment name for logs and checkpoints (optional, uses config default)
-- `--resume`: Path to specific checkpoint to resume from (optional)
+- `--exp-name`: Experiment name for logs and checkpoints (optional)
+- `--resume`: Resume from specific checkpoint (optional)
 - `--log-dir`: Directory for logs (default: `./logs`)
 - `--checkpoint-dir`: Directory for checkpoints (default: `./checkpoints`)
+- `--device`: Device to use, e.g., `cuda:0`, `cpu` (single GPU only, optional)
 
-### Auto-Resume
+## Features
 
-The training automatically resumes from `latest_checkpoint.pth` if found in the checkpoint directory.
+- NDS and mAP metrics calculation
+- TensorBoard logging
+- Auto-resume from latest checkpoint
+- Sequential scene processing for proper temporal evaluation
+- Memory-efficient validation with GPU cache management
 
 ## Configuration
 
