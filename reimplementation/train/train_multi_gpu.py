@@ -35,8 +35,8 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
         """Create and wrap model with DDP."""
         model = super().setup_model()
 
-        # Wrap model with DDP
-        model = DDP(model, device_ids=[self.rank], output_device=self.rank)
+        # Wrap model with DDP - enable find_unused_parameters for complex models like BEVFormer
+        model = DDP(model, device_ids=[self.rank], output_device=self.rank, find_unused_parameters=True)
         self.model = model
         return model
 

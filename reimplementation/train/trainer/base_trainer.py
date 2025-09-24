@@ -11,7 +11,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.utils.data as data
+import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
+import pickle
 
 # Add parent directories to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -55,9 +57,10 @@ class BEVFormerTrainer:
         self.writer = None
         self.best_loss = float('inf')
 
-        # Setup directories
-        Path(log_dir).mkdir(parents=True, exist_ok=True)
-        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        # Setup directories (only on main process)
+        if is_main_process():
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
     def setup_model(self) -> BEVFormer:
         """Create and configure BEVFormer model."""
@@ -218,6 +221,19 @@ class BEVFormerTrainer:
         for key in epoch_losses:
             epoch_losses[key] /= len(self.train_loader)
 
+        # Average losses across all GPUs in distributed training
+        if dist.is_available() and dist.is_initialized():
+            # Convert losses to tensors for averaging
+            loss_tensor = torch.tensor(avg_epoch_loss, device=self.device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+            avg_epoch_loss = loss_tensor.item()
+
+            # Average individual loss components
+            for key in epoch_losses:
+                loss_tensor = torch.tensor(epoch_losses[key], device=self.device)
+                dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+                epoch_losses[key] = loss_tensor.item()
+
         epoch_time = time.time() - epoch_start_time
         if is_main_process():
             self.logger.info(f"Epoch {epoch} completed in {epoch_time:.2f}s | Average Loss: {avg_epoch_loss:.4f}")
@@ -319,10 +335,19 @@ class BEVFormerTrainer:
                                     current_scene_token = scene_token
 
                                 # Forward test with proper format
-                                model_output = self.model.forward_test(
-                                    img=[current_img],
-                                    img_metas=[[current_meta]]
-                                )
+                                # Handle DDP wrapper - access underlying model
+                                if hasattr(self.model, 'module'):
+                                    # Distributed training - use model.module
+                                    model_output = self.model.module.forward_test(
+                                        img=[current_img],
+                                        img_metas=[[current_meta]]
+                                    )
+                                else:
+                                    # Single GPU training
+                                    model_output = self.model.forward_test(
+                                        img=[current_img],
+                                        img_metas=[[current_meta]]
+                                    )
 
                                 # Extract detections
                                 detections = extract_detections_from_model_output(model_output)
@@ -380,35 +405,53 @@ class BEVFormerTrainer:
                         self.logger.warning(f"Error processing batch {batch_idx}: {e}")
                     continue
 
-        # Average losses
+        # Average losses - handle distributed averaging
         avg_total_loss = total_loss / processed_batches if processed_batches > 0 else 0.0
         for key in val_losses:
             val_losses[key] /= processed_batches
 
-        # Calculate metrics if enabled
+        # Average losses across all GPUs in distributed training
+        if dist.is_available() and dist.is_initialized():
+            # Convert losses to tensors for averaging
+            loss_tensor = torch.tensor(avg_total_loss, device=self.device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+            avg_total_loss = loss_tensor.item()
+
+            # Average individual loss components
+            for key in val_losses:
+                loss_tensor = torch.tensor(val_losses[key], device=self.device)
+                dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+                val_losses[key] = loss_tensor.item()
+
+        # Calculate metrics if enabled - handle distributed gathering
         metrics_results = {}
-        if compute_metrics and predictions and ground_truths and is_main_process():
-            class_names = self.config.get('data', {}).get('class_names', [])
-            distance_thresholds = self.config.get('evaluation', {}).get('distance_thresholds', [0.5, 1.0, 2.0, 4.0])
+        if compute_metrics and predictions and ground_truths:
+            # Gather predictions and ground truths from all GPUs if distributed
+            all_predictions, all_ground_truths = self._gather_validation_results(predictions, ground_truths)
 
-            self.logger.info("Computing NDS and mAP metrics...")
-            try:
-                metrics_results = calculate_nds_map(
-                    predictions,
-                    ground_truths,
-                    class_names,
-                    distance_thresholds
-                )
-                self.logger.info(f"Validation Metrics:")
-                self.logger.info(f"  NDS: {metrics_results['NDS']:.4f}")
-                self.logger.info(f"  mAP: {metrics_results['mAP']:.4f}")
+            # Only compute metrics on main process with all gathered data
+            if is_main_process() and all_predictions and all_ground_truths:
+                class_names = self.config.get('data', {}).get('class_names', [])
+                distance_thresholds = self.config.get('evaluation', {}).get('distance_thresholds', [0.5, 1.0, 2.0, 4.0])
 
-                # Log per-class AP if available
-                if 'per_class_AP' in metrics_results:
-                    for class_name, ap in metrics_results['per_class_AP'].items():
-                        self.logger.info(f"  {class_name}_AP: {ap:.4f}")
-            except Exception as e:
-                self.logger.warning(f"Failed to compute metrics: {e}")
+                self.logger.info(f"Computing NDS and mAP metrics on {len(all_predictions)} total samples...")
+                try:
+                    metrics_results = calculate_nds_map(
+                        all_predictions,
+                        all_ground_truths,
+                        class_names,
+                        distance_thresholds
+                    )
+                    self.logger.info(f"Validation Metrics:")
+                    self.logger.info(f"  NDS: {metrics_results['NDS']:.4f}")
+                    self.logger.info(f"  mAP: {metrics_results['mAP']:.4f}")
+
+                    # Log per-class AP if available
+                    if 'per_class_AP' in metrics_results:
+                        for class_name, ap in metrics_results['per_class_AP'].items():
+                            self.logger.info(f"  {class_name}_AP: {ap:.4f}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to compute metrics: {e}")
 
         if is_main_process():
             self.logger.info(f"Validation Results (processed {processed_batches} batches):")
@@ -502,6 +545,8 @@ class BEVFormerTrainer:
 
         for epoch in range(start_epoch, end_epoch):
             # Training
+            # TEST_VAL: REMOVE
+            avg_val_loss = self.validate_epoch(epoch)
             avg_train_loss = self.train_epoch(epoch)
 
             # Validation
@@ -525,6 +570,55 @@ class BEVFormerTrainer:
         if is_main_process():
             self.logger.info(f"Training completed! Total time: {total_training_time / 3600:.2f} hours")
             self.logger.info(f"Best validation loss: {self.best_loss:.4f}")
+
+    def _gather_validation_results(self, predictions, ground_truths):
+        """Gather validation results from all GPUs in distributed training."""
+        if not dist.is_available() or not dist.is_initialized():
+            # Single GPU training - return as is
+            return predictions, ground_truths
+
+        try:
+            # Convert tensors to CPU and serialize results
+            cpu_predictions = self._move_to_cpu(predictions)
+            cpu_ground_truths = self._move_to_cpu(ground_truths)
+
+            # Use all_gather_object for complex data structures
+            all_predictions = [None] * dist.get_world_size()
+            all_ground_truths = [None] * dist.get_world_size()
+
+            dist.all_gather_object(all_predictions, cpu_predictions)
+            dist.all_gather_object(all_ground_truths, cpu_ground_truths)
+
+            if is_main_process():
+                # Flatten the gathered results
+                flattened_predictions = []
+                flattened_ground_truths = []
+
+                for rank_preds, rank_gts in zip(all_predictions, all_ground_truths):
+                    if rank_preds is not None and rank_gts is not None:
+                        flattened_predictions.extend(rank_preds)
+                        flattened_ground_truths.extend(rank_gts)
+
+                return flattened_predictions, flattened_ground_truths
+            else:
+                return [], []
+
+        except Exception as e:
+            if is_main_process():
+                self.logger.warning(f"Failed to gather distributed validation results: {e}")
+                self.logger.warning("Falling back to per-GPU metrics (may be inaccurate)")
+            return predictions, ground_truths
+
+    def _move_to_cpu(self, data):
+        """Move all tensors in data structure to CPU."""
+        if isinstance(data, list):
+            return [self._move_to_cpu(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: self._move_to_cpu(value) for key, value in data.items()}
+        elif torch.is_tensor(data):
+            return data.detach().cpu()
+        else:
+            return data
 
     def cleanup(self) -> None:
         """Clean up resources."""
