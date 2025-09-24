@@ -250,13 +250,18 @@ class BEVFormerTrainer:
                 formatted_losses = format_detailed_losses(losses)
                 self.logger.info(f"\n{formatted_losses}")
 
-                # TensorBoard logging
+                # TensorBoard logging - organized structure
                 if self.writer:
                     global_step = epoch * len(self.train_loader) + batch_idx
-                    self.writer.add_scalar('train/total_loss', batch_total_loss.item(), global_step)
-                    self.writer.add_scalar('train/learning_rate', self.optimizer.param_groups[0]['lr'], global_step)
-                    self.writer.add_scalar('train/samples_per_sec', metrics['samples_per_sec'], global_step)
-                    self.writer.add_scalar('train/images_per_sec', metrics['images_per_sec'], global_step)
+
+                    # Performance metrics
+                    self.writer.add_scalar('performance/samples_per_sec', metrics['samples_per_sec'], global_step)
+                    self.writer.add_scalar('performance/images_per_sec', metrics['images_per_sec'], global_step)
+                    self.writer.add_scalar('performance/iteration_time', metrics['time_per_iteration'], global_step)
+                    self.writer.add_scalar('performance/learning_rate', self.optimizer.param_groups[0]['lr'], global_step)
+
+                    # Detailed train losses
+                    self.writer.add_scalar('train/batch_total_loss', batch_total_loss.item(), global_step)
                     for key, value in losses.items():
                         if torch.is_tensor(value):
                             self.writer.add_scalar(f'train/{key}', value.item(), global_step)
@@ -286,6 +291,18 @@ class BEVFormerTrainer:
         epoch_time = time.time() - epoch_start_time
         if is_main_process():
             self.logger.info(f"Epoch {epoch} completed in {epoch_time:.2f}s | Average Loss: {avg_epoch_loss:.4f}")
+
+            # Log epoch averages to TensorBoard
+            if self.writer:
+                self.writer.add_scalar('averages/train_loss', avg_epoch_loss, epoch)
+                for key, avg_value in epoch_losses.items():
+                    self.writer.add_scalar(f'averages/train_{key}', avg_value, epoch)
+
+                # Log epoch timing and performance
+                self.writer.add_scalar('performance/epoch_time', epoch_time, epoch)
+                if self.iteration_times:
+                    avg_iter_time = sum(self.iteration_times) / len(self.iteration_times)
+                    self.writer.add_scalar('performance/avg_iteration_time', avg_iter_time, epoch)
 
         return avg_epoch_loss
 
@@ -508,18 +525,29 @@ class BEVFormerTrainer:
             for key, value in val_losses.items():
                 self.logger.info(f"  {key}: {value:.4f}")
 
-        # Log to TensorBoard
+        # Log to TensorBoard - organized structure
         if self.writer and is_main_process():
+            # Validation averages
+            self.writer.add_scalar('averages/val_loss', avg_total_loss, epoch)
+            for key, value in val_losses.items():
+                self.writer.add_scalar(f'averages/val_{key}', value, epoch)
+
+            # Detailed validation losses
             self.writer.add_scalar('val/total_loss', avg_total_loss, epoch)
             for key, value in val_losses.items():
                 self.writer.add_scalar(f'val/{key}', value, epoch)
 
-            # Log metrics to TensorBoard
+            # Validation metrics
             if metrics_results:
+                # Averages - main metrics
+                self.writer.add_scalar('averages/val_NDS', metrics_results['NDS'], epoch)
+                self.writer.add_scalar('averages/val_mAP', metrics_results['mAP'], epoch)
+
+                # Detailed validation metrics
                 self.writer.add_scalar('val/NDS', metrics_results['NDS'], epoch)
                 self.writer.add_scalar('val/mAP', metrics_results['mAP'], epoch)
 
-                # Log per-class AP
+                # Per-class AP (detailed)
                 if 'per_class_AP' in metrics_results:
                     for class_name, ap in metrics_results['per_class_AP'].items():
                         self.writer.add_scalar(f'val/{class_name}_AP', ap, epoch)

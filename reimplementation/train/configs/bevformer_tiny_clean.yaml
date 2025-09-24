@@ -121,7 +121,7 @@ evaluation:
 logging:
   tensorboard:
     enabled: true
-    log_interval: 10  # Training batch logging interval
+    log_interval: 50  # Training batch logging interval
   val_log_interval: 10  # Validation batch logging interval
 
 # Checkpoint Configuration
