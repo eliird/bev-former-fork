@@ -116,14 +116,23 @@ class LoadMultiViewImageFromFiles:
             
             filepath = cam_info['data_path']
 
-            # Check if file exists, if not try to construct correct path
+            # Check if file exists, if not try alternative paths
             if not os.path.exists(filepath):
-                # Try to construct path relative to data directory
-                # This handles case where we're running from reimplementation directory
-                # but paths in pickle are relative to root directory
-                alt_filepath = os.path.join('..', filepath)
-                if os.path.exists(alt_filepath):
-                    filepath = alt_filepath
+                # Try different relative paths depending on where we're running from
+                possible_paths = [
+                    os.path.join('..', filepath),           # One level up (from reimplementation/)
+                    os.path.join('..', '..', filepath),     # Two levels up (from train/ or similar)
+                    os.path.join('..', '..', '..', filepath), # Three levels up (just in case)
+                    filepath.replace('./data/', '../../data/'),  # Direct replacement for common case
+                ]
+
+                for alt_path in possible_paths:
+                    if os.path.exists(alt_path):
+                        filepath = alt_path
+                        break
+                else:
+                    # If none of the alternative paths work, keep the original for error reporting
+                    pass
 
             # Load image
             img = self._load_single_image(filepath)
