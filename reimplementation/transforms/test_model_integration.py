@@ -159,7 +159,7 @@ def test_end_to_end_integration():
     print("=" * 80)
     
     # Load nuScenes data
-    data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+    data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
     if not os.path.exists(data_file):
         print("❌ nuScenes dataset not found!")
         return None

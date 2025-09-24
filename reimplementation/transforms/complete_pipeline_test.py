@@ -130,7 +130,7 @@ def test_complete_pipeline():
     print("=" * 80)
     
     # Load nuScenes data
-    data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+    data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
     if not os.path.exists(data_file):
         print("❌ nuScenes dataset not found. Please ensure the dataset is available.")
         return None

@@ -108,7 +108,7 @@ def test_normalize_multi_view_image():
     from load_multi_view_image import LoadMultiViewImageFromFiles
     
     # Load sample data
-    data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+    data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
     if not os.path.exists(data_file):
         print(f"❌ Data file not found: {data_file}")
         return

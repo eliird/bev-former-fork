@@ -205,7 +205,7 @@ def test_load_annotations_3d():
     import os
     
     # Load sample data
-    data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+    data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
     if not os.path.exists(data_file):
         print(f"❌ Data file not found: {data_file}")
         return

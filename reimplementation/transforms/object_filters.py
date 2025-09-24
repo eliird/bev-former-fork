@@ -177,7 +177,7 @@ def test_object_filters():
     from load_annotations_3d import LoadAnnotations3D
     
     # Load sample data
-    data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+    data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
     if not os.path.exists(data_file):
         print(f"❌ Data file not found: {data_file}")
         return
@@ -311,7 +311,7 @@ def test_filter_pipeline():
         import pickle
         
         # Load sample data
-        data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+        data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
         if not os.path.exists(data_file):
             print("❌ Dataset not found")
             return

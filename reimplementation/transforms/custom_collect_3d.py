@@ -172,7 +172,7 @@ def test_custom_collect_3d():
         import pickle
         
         # Load sample data
-        data_file = '/home/irdali.durrani/po-pi/BEVFormer/data/nuscenes/nuscenes_infos_temporal_val.pkl'
+        data_file = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
         if os.path.exists(data_file):
             with open(data_file, 'rb') as f:
                 data = pickle.load(f)
