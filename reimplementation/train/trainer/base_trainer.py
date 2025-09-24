@@ -25,7 +25,8 @@ sys.path.insert(0, train_dir)
 from dataset import NuScenesDataset, custom_collate_fn
 from models import BEVFormer
 from evaluation import calculate_nds_map, extract_detections_from_model_output
-from .utils import count_parameters, is_main_process, get_rank
+from .utils import (count_parameters, is_main_process, get_rank,
+                    format_duration, format_detailed_losses, calculate_training_metrics)
 
 
 class BEVFormerTrainer:
@@ -56,6 +57,12 @@ class BEVFormerTrainer:
         self.val_loader = None
         self.writer = None
         self.best_loss = float('inf')
+
+        # Timing and performance tracking
+        self.training_start_time = None
+        self.epoch_start_times = {}
+        self.iteration_times = []
+        self.total_samples_processed = 0
 
         # Setup directories (only on main process)
         if is_main_process():
@@ -131,7 +138,7 @@ class BEVFormerTrainer:
             return writer
         return None
 
-    def train_epoch(self, epoch: int) -> float:
+    def train_epoch(self, epoch: int, total_epochs: int = None) -> float:
         """Train one epoch."""
         if self.model is None or self.train_loader is None or self.optimizer is None:
             raise RuntimeError("Model, dataloader, or optimizer not initialized")
@@ -142,11 +149,23 @@ class BEVFormerTrainer:
 
         log_interval = self.config.get('logging', {}).get('tensorboard', {}).get('log_interval', 50)
 
+        # Enhanced epoch logging
         if is_main_process():
-            self.logger.info(f"Starting epoch {epoch}")
+            if total_epochs:
+                progress_percent = (epoch + 1) / total_epochs * 100
+                self.logger.info("═" * 60)
+                self.logger.info(f"EPOCH {epoch + 1}/{total_epochs} (Progress: {progress_percent:.1f}%)")
+                self.logger.info("═" * 60)
+            else:
+                self.logger.info("═" * 60)
+                self.logger.info(f"EPOCH {epoch + 1}")
+                self.logger.info("═" * 60)
+
         epoch_start_time = time.time()
+        self.epoch_start_times[epoch] = epoch_start_time
 
         for batch_idx, batch in enumerate(self.train_loader):
+            iteration_start_time = time.time()
             # Check if GT data is available
             if 'gt_bboxes_3d' not in batch or 'gt_labels_3d' not in batch:
                 if is_main_process():
@@ -192,22 +211,52 @@ class BEVFormerTrainer:
 
             total_loss += batch_total_loss.item()
 
-            # Logging
+            # Calculate iteration time and metrics
+            iteration_time = time.time() - iteration_start_time
+            self.iteration_times.append(iteration_time)
+
+            # Keep only recent iteration times (sliding window)
+            if len(self.iteration_times) > 100:
+                self.iteration_times = self.iteration_times[-100:]
+
+            batch_size = batch_img.size(0)
+            queue_length = batch_img.size(1)
+            self.total_samples_processed += batch_size
+
+            # Enhanced logging with performance metrics
             if is_main_process() and batch_idx % log_interval == 0:
                 avg_loss = total_loss / (batch_idx + 1)
-                self.logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(self.train_loader)} | "
-                               f"Loss: {batch_total_loss.item():.4f} | Avg Loss: {avg_loss:.4f} | "
+
+                # Calculate training metrics
+                avg_iteration_time = sum(self.iteration_times[-10:]) / len(self.iteration_times[-10:])
+                metrics = calculate_training_metrics(batch_size, avg_iteration_time, queue_length)
+
+                # Calculate ETA
+                remaining_batches = len(self.train_loader) - batch_idx - 1
+                eta_seconds = remaining_batches * avg_iteration_time
+                eta_str = format_duration(eta_seconds)
+
+                # Main progress log
+                self.logger.info(f"Batch {batch_idx + 1}/{len(self.train_loader)} | "
+                               f"Loss: {batch_total_loss.item():.4f} | Avg: {avg_loss:.4f} | "
                                f"LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
-                # Log individual losses
-                loss_info = " | ".join([f"{k}: {v.item():.4f}" for k, v in losses.items() if torch.is_tensor(v)])
-                self.logger.info(f"  Detailed losses: {loss_info}")
+                # Performance metrics log
+                self.logger.info(f"Speed: {metrics['samples_per_sec']:.1f} samples/sec | "
+                               f"{metrics['images_per_sec']:.1f} images/sec | "
+                               f"Time/iter: {metrics['time_per_iteration']:.3f}s | ETA: {eta_str}")
+
+                # Detailed losses with better formatting
+                formatted_losses = format_detailed_losses(losses)
+                self.logger.info(f"\n{formatted_losses}")
 
                 # TensorBoard logging
                 if self.writer:
                     global_step = epoch * len(self.train_loader) + batch_idx
                     self.writer.add_scalar('train/total_loss', batch_total_loss.item(), global_step)
                     self.writer.add_scalar('train/learning_rate', self.optimizer.param_groups[0]['lr'], global_step)
+                    self.writer.add_scalar('train/samples_per_sec', metrics['samples_per_sec'], global_step)
+                    self.writer.add_scalar('train/images_per_sec', metrics['images_per_sec'], global_step)
                     for key, value in losses.items():
                         if torch.is_tensor(value):
                             self.writer.add_scalar(f'train/{key}', value.item(), global_step)
@@ -539,15 +588,27 @@ class BEVFormerTrainer:
         eval_interval = self.config.get('evaluation', {}).get('eval_interval', 1)
         save_interval = self.config.get('checkpoint', {}).get('save_interval', 5)
 
+        # Job start logging
+        self.training_start_time = time.time()
         if is_main_process():
-            self.logger.info("Starting training...")
-        training_start_time = time.time()
+            start_time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.training_start_time))
+            self.logger.info("═" * 80)
+            self.logger.info("BEVFORMER TRAINING JOB STARTED")
+            self.logger.info("═" * 80)
+            self.logger.info(f"Start Time:    {start_time_str}")
+            self.logger.info(f"Experiment:    {Path(self.log_dir).name}")
+            self.logger.info(f"Total Epochs:  {end_epoch}")
+            self.logger.info(f"Start Epoch:   {start_epoch}")
+            self.logger.info(f"Device:        {self.device}")
+            if hasattr(self, 'train_loader') and self.train_loader:
+                self.logger.info(f"Batches/Epoch: {len(self.train_loader)}")
+            self.logger.info("═" * 80)
 
         for epoch in range(start_epoch, end_epoch):
             # Training
             # TEST_VAL: REMOVE
             avg_val_loss = self.validate_epoch(epoch)
-            avg_train_loss = self.train_epoch(epoch)
+            avg_train_loss = self.train_epoch(epoch, total_epochs=end_epoch)
 
             # Validation
             if (epoch + 1) % eval_interval == 0:
@@ -566,10 +627,38 @@ class BEVFormerTrainer:
                 if is_main_process():
                     self.logger.info(f"Checkpoint saved at epoch {epoch}")
 
-        total_training_time = time.time() - training_start_time
+        # Job completion logging
+        training_end_time = time.time()
+        total_training_time = training_end_time - self.training_start_time
+
         if is_main_process():
-            self.logger.info(f"Training completed! Total time: {total_training_time / 3600:.2f} hours")
-            self.logger.info(f"Best validation loss: {self.best_loss:.4f}")
+            start_time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self.training_start_time))
+            end_time_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(training_end_time))
+            duration_str = format_duration(total_training_time)
+
+            # Calculate average training speed
+            if hasattr(self, 'train_loader') and self.train_loader:
+                total_iterations = len(self.train_loader) * (end_epoch - start_epoch)
+                avg_iteration_time = total_training_time / total_iterations if total_iterations > 0 else 0
+                avg_samples_per_sec = (self.total_samples_processed / total_training_time) if total_training_time > 0 else 0
+            else:
+                avg_iteration_time = 0
+                avg_samples_per_sec = 0
+
+            self.logger.info("═" * 80)
+            self.logger.info("TRAINING COMPLETED")
+            self.logger.info("═" * 80)
+            self.logger.info(f"Job Start:       {start_time_str}")
+            self.logger.info(f"Job End:         {end_time_str}")
+            self.logger.info(f"Total Duration:  {duration_str}")
+            self.logger.info(f"Epochs:          {end_epoch - start_epoch}/{end_epoch} completed")
+            self.logger.info(f"Best Val Loss:   {self.best_loss:.4f}")
+            if self.total_samples_processed > 0:
+                self.logger.info(f"Total Samples:   {self.total_samples_processed:,} processed")
+                self.logger.info(f"Avg Speed:       {avg_samples_per_sec:.1f} samples/sec")
+            if avg_iteration_time > 0:
+                self.logger.info(f"Avg Iter Time:   {avg_iteration_time:.3f}s")
+            self.logger.info("═" * 80)
 
     def _gather_validation_results(self, predictions, ground_truths):
         """Gather validation results from all GPUs in distributed training."""

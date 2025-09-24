@@ -105,11 +105,11 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
 
         return train_loader, val_loader
 
-    def train_epoch(self, epoch):
+    def train_epoch(self, epoch, total_epochs=None):
         """Train one epoch with distributed sampling."""
         # Set epoch for distributed sampler
         self.train_sampler.set_epoch(epoch)
-        return super().train_epoch(epoch)
+        return super().train_epoch(epoch, total_epochs=total_epochs)
 
     def validate_epoch(self, epoch):
         """Validate one epoch with distributed sampling."""
