@@ -25,7 +25,7 @@ sys.path.insert(0, train_dir)
 from dataset import NuScenesDataset, custom_collate_fn
 from models import BEVFormer
 from evaluation import calculate_nds_map, extract_detections_from_model_output
-from .utils import (count_parameters, is_main_process, get_rank,
+from .utils import (count_parameters, is_main_process, get_rank, get_world_size,
                     format_duration, format_detailed_losses, calculate_training_metrics)
 
 
@@ -227,9 +227,10 @@ class BEVFormerTrainer:
             if is_main_process() and batch_idx % log_interval == 0:
                 avg_loss = total_loss / (batch_idx + 1)
 
-                # Calculate training metrics
+                # Calculate training metrics with world size
                 avg_iteration_time = sum(self.iteration_times[-10:]) / len(self.iteration_times[-10:])
-                metrics = calculate_training_metrics(batch_size, avg_iteration_time, queue_length)
+                world_size = get_world_size()
+                metrics = calculate_training_metrics(batch_size, avg_iteration_time, queue_length, world_size)
 
                 # Calculate ETA
                 remaining_batches = len(self.train_loader) - batch_idx - 1
@@ -241,10 +242,17 @@ class BEVFormerTrainer:
                                f"Loss: {batch_total_loss.item():.4f} | Avg: {avg_loss:.4f} | "
                                f"LR: {self.optimizer.param_groups[0]['lr']:.2e}")
 
-                # Performance metrics log
-                self.logger.info(f"Speed: {metrics['samples_per_sec']:.1f} samples/sec | "
-                               f"{metrics['images_per_sec']:.1f} images/sec | "
-                               f"Time/iter: {metrics['time_per_iteration']:.3f}s | ETA: {eta_str}")
+                # Performance metrics log - show both total and per-GPU for distributed
+                if world_size > 1:
+                    self.logger.info(f"Speed: {metrics['samples_per_sec_total']:.1f} samples/sec total "
+                                   f"({metrics['samples_per_sec_per_gpu']:.1f}/gpu) | "
+                                   f"{metrics['images_per_sec_total']:.1f} images/sec total "
+                                   f"({metrics['images_per_sec_per_gpu']:.1f}/gpu) | "
+                                   f"Time/iter: {metrics['time_per_iteration']:.3f}s | ETA: {eta_str}")
+                else:
+                    self.logger.info(f"Speed: {metrics['samples_per_sec_total']:.1f} samples/sec | "
+                                   f"{metrics['images_per_sec_total']:.1f} images/sec | "
+                                   f"Time/iter: {metrics['time_per_iteration']:.3f}s | ETA: {eta_str}")
 
                 # Detailed losses with better formatting
                 formatted_losses = format_detailed_losses(losses)
@@ -254,9 +262,11 @@ class BEVFormerTrainer:
                 if self.writer:
                     global_step = epoch * len(self.train_loader) + batch_idx
 
-                    # Performance metrics
-                    self.writer.add_scalar('performance/samples_per_sec', metrics['samples_per_sec'], global_step)
-                    self.writer.add_scalar('performance/images_per_sec', metrics['images_per_sec'], global_step)
+                    # Performance metrics - both total and per-GPU
+                    self.writer.add_scalar('performance/samples_per_sec_total', metrics['samples_per_sec_total'], global_step)
+                    self.writer.add_scalar('performance/samples_per_sec_per_gpu', metrics['samples_per_sec_per_gpu'], global_step)
+                    self.writer.add_scalar('performance/images_per_sec_total', metrics['images_per_sec_total'], global_step)
+                    self.writer.add_scalar('performance/images_per_sec_per_gpu', metrics['images_per_sec_per_gpu'], global_step)
                     self.writer.add_scalar('performance/iteration_time', metrics['time_per_iteration'], global_step)
                     self.writer.add_scalar('performance/learning_rate', self.optimizer.param_groups[0]['lr'], global_step)
 
@@ -292,11 +302,9 @@ class BEVFormerTrainer:
         if is_main_process():
             self.logger.info(f"Epoch {epoch} completed in {epoch_time:.2f}s | Average Loss: {avg_epoch_loss:.4f}")
 
-            # Log epoch averages to TensorBoard
+            # Log epoch averages to TensorBoard - only main losses
             if self.writer:
                 self.writer.add_scalar('averages/train_loss', avg_epoch_loss, epoch)
-                for key, avg_value in epoch_losses.items():
-                    self.writer.add_scalar(f'averages/train_{key}', avg_value, epoch)
 
                 # Log epoch timing and performance
                 self.writer.add_scalar('performance/epoch_time', epoch_time, epoch)
@@ -527,23 +535,16 @@ class BEVFormerTrainer:
 
         # Log to TensorBoard - organized structure
         if self.writer and is_main_process():
-            # Validation averages
+            # Validation averages - only main loss
             self.writer.add_scalar('averages/val_loss', avg_total_loss, epoch)
-            for key, value in val_losses.items():
-                self.writer.add_scalar(f'averages/val_{key}', value, epoch)
 
             # Detailed validation losses
             self.writer.add_scalar('val/total_loss', avg_total_loss, epoch)
             for key, value in val_losses.items():
                 self.writer.add_scalar(f'val/{key}', value, epoch)
 
-            # Validation metrics
+            # Detailed validation metrics
             if metrics_results:
-                # Averages - main metrics
-                self.writer.add_scalar('averages/val_NDS', metrics_results['NDS'], epoch)
-                self.writer.add_scalar('averages/val_mAP', metrics_results['mAP'], epoch)
-
-                # Detailed validation metrics
                 self.writer.add_scalar('val/NDS', metrics_results['NDS'], epoch)
                 self.writer.add_scalar('val/mAP', metrics_results['mAP'], epoch)
 

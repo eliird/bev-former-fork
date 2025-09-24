@@ -236,32 +236,43 @@ def format_detailed_losses(losses: dict, indent: str = "    ") -> str:
     return '\n'.join(lines)
 
 
-def calculate_training_metrics(batch_size: int, iteration_time: float, queue_length: int = 1) -> dict:
+def calculate_training_metrics(batch_size: int, iteration_time: float, queue_length: int = 1, world_size: int = 1) -> dict:
     """Calculate training speed metrics.
 
     Args:
-        batch_size: Number of samples per batch
+        batch_size: Number of samples per batch (per GPU)
         iteration_time: Time taken for one iteration in seconds
         queue_length: Number of images per sample (temporal queue)
+        world_size: Number of GPUs (for distributed training)
 
     Returns:
         Dictionary with training metrics
     """
     if iteration_time <= 0:
         return {
-            'samples_per_sec': 0.0,
-            'images_per_sec': 0.0,
+            'samples_per_sec_total': 0.0,
+            'samples_per_sec_per_gpu': 0.0,
+            'images_per_sec_total': 0.0,
+            'images_per_sec_per_gpu': 0.0,
             'time_per_iteration': 0.0,
             'iterations_per_sec': 0.0
         }
 
-    samples_per_sec = batch_size / iteration_time
-    images_per_sec = samples_per_sec * queue_length
+    # Per-GPU metrics
+    samples_per_sec_per_gpu = batch_size / iteration_time
+    images_per_sec_per_gpu = samples_per_sec_per_gpu * queue_length
+
+    # Total throughput across all GPUs
+    samples_per_sec_total = samples_per_sec_per_gpu * world_size
+    images_per_sec_total = images_per_sec_per_gpu * world_size
+
     iterations_per_sec = 1.0 / iteration_time
 
     return {
-        'samples_per_sec': samples_per_sec,
-        'images_per_sec': images_per_sec,
+        'samples_per_sec_total': samples_per_sec_total,
+        'samples_per_sec_per_gpu': samples_per_sec_per_gpu,
+        'images_per_sec_total': images_per_sec_total,
+        'images_per_sec_per_gpu': images_per_sec_per_gpu,
         'time_per_iteration': iteration_time,
         'iterations_per_sec': iterations_per_sec
     }
