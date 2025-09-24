@@ -1,0 +1,128 @@
+# BEVFormer-Tiny Configuration (Clean)
+# Minimal configuration for train_yaml.py
+
+experiment:
+  name: "bevformer_tiny_r50_clean"
+  description: "BEVFormer-Tiny with ResNet-50 backbone - clean config"
+
+# Model Configuration
+model:
+  embed_dims: 256
+  encoder_layers: 3  # Tiny model
+  decoder_layers: 3  # Tiny model
+  num_query: 900
+  bev_h: 200
+  bev_w: 200
+  use_grid_mask: false
+
+  # Backbone configuration
+  backbone:
+    depth: 50
+    num_stages: 4
+    out_indices: [1, 2, 3]
+    frozen_stages: 1
+    with_cp: false
+
+  # Neck configuration
+  neck:
+    in_channels: [512, 1024, 2048]
+    out_channels: 256  # Should match embed_dims
+    num_outs: 4
+    start_level: 0
+    add_extra_convs: "on_output"
+    relu_before_extra_convs: true
+
+  # Transformer configuration
+  transformer:
+    num_points_in_pillar: 4
+    return_intermediate_encoder: false
+    return_intermediate_decoder: true
+    rotate_prev_bev: true
+    use_shift: true
+    use_can_bus: true
+
+  # Bbox coder configuration
+  bbox_coder:
+    post_center_range: [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0]
+    max_num: 300
+
+  # Loss configuration
+  loss:
+    # Classification loss (Focal Loss)
+    cls:
+      use_sigmoid: true
+      gamma: 2.0
+      alpha: 0.25
+      loss_weight: 2.0
+
+    # Bbox regression loss (L1 Loss)
+    bbox:
+      loss_weight: 0.25
+
+    # IoU loss (GIoU Loss)
+    iou:
+      loss_weight: 0.0  # Disabled but computed
+
+# Data Configuration
+data:
+  data_root: "../../data/nuscenes"
+  train_pkl: "nuscenes_infos_temporal_train.pkl"
+  val_pkl: "nuscenes_infos_temporal_val.pkl"
+  queue_length: 4
+
+  # Point cloud range
+  pc_range: [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+
+  # Class names (nuScenes 10 classes)
+  class_names: [
+    "car", "truck", "construction_vehicle", "bus", "trailer",
+    "barrier", "motorcycle", "bicycle", "pedestrian", "traffic_cone"
+  ]
+
+# Training Configuration
+training:
+  epochs: 24
+  batch_size: 2  # Tiny model can use larger batch
+  val_batch_size: 1
+  num_workers: 4
+
+  # Optimizer
+  optimizer:
+    lr: 2.5e-4  # Slightly higher for smaller model
+    weight_decay: 0.01
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+  # Learning rate scheduler
+  scheduler:
+    type: "CosineAnnealingLR"
+    T_max: 24
+    eta_min: 1.0e-7
+
+  # Gradient clipping
+  grad_clip:
+    max_norm: 35.0
+    norm_type: 2
+
+  # Mixed precision (disabled to avoid dtype issues)
+  fp16:
+    enabled: false
+    loss_scale: "dynamic"
+
+# Evaluation Configuration
+evaluation:
+  eval_interval: 2  # More frequent for tiny model
+  eval_start_epoch: 1
+  max_eval_samples: 500  # Subset for faster validation
+
+# Logging Configuration
+logging:
+  tensorboard:
+    enabled: true
+    log_interval: 10  # Training batch logging interval
+  val_log_interval: 10  # Validation batch logging interval
+
+# Checkpoint Configuration
+checkpoint:
+  save_interval: 5
+  keep_last: 3
