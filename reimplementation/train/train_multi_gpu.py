@@ -8,11 +8,13 @@ import os
 import sys
 import argparse
 from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
+from torch.profiler import profile, record_function, ProfilerActivity, schedule
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -25,11 +27,25 @@ from trainer.utils import cleanup_distributed, is_main_process, get_rank
 class DistributedBEVFormerTrainer(BEVFormerTrainer):
     """BEVFormer trainer with distributed training support."""
 
-    def __init__(self, config, device, logger, log_dir, checkpoint_dir, rank, world_size):
-        """Initialize distributed trainer."""
+    def __init__(self, config, device, logger, log_dir, checkpoint_dir, rank, world_size, profiler_config=None):
+        """Initialize distributed trainer.
+
+        Args:
+            config: Training configuration
+            device: Device for training
+            logger: Logger instance
+            log_dir: Log directory
+            checkpoint_dir: Checkpoint directory
+            rank: Process rank
+            world_size: Total number of processes
+            profiler_config: Optional profiler configuration dict
+        """
         super().__init__(config, device, logger, log_dir, checkpoint_dir)
         self.rank = rank
         self.world_size = world_size
+        self.profiler_config = profiler_config or {}
+        self.profiler = None
+        self.profiling_step = 0
 
     def setup_model(self):
         """Create and wrap model with DDP."""
@@ -106,10 +122,357 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
         return train_loader, val_loader
 
     def train_epoch(self, epoch, total_epochs=None):
-        """Train one epoch with distributed sampling."""
+        """Train one epoch with distributed sampling and optional profiling."""
         # Set epoch for distributed sampler
         self.train_sampler.set_epoch(epoch)
-        return super().train_epoch(epoch, total_epochs=total_epochs)
+
+        # Setup profiler if configured and this is the first epoch
+        if self.profiler_config.get('enabled', False) and epoch == 0 and self.rank == 0:
+            self._setup_profiler()
+
+        # Call parent train_epoch with profiler
+        avg_loss = self._train_epoch_with_profiler(epoch, total_epochs)
+
+        # Cleanup profiler after epoch if it was active
+        if self.profiler is not None and epoch == 0:
+            self._export_profiler_results()
+            self.profiler = None
+
+        return avg_loss
+
+    def _setup_profiler(self):
+        """Setup PyTorch profiler for performance analysis."""
+        profile_dir = self.profiler_config.get('profile_dir', './profiling')
+        wait_steps = self.profiler_config.get('wait', 2)
+        warmup_steps = self.profiler_config.get('warmup', 1)
+        active_steps = self.profiler_config.get('active', 5)
+        repeat = self.profiler_config.get('repeat', 1)
+
+        # Create profiling directory
+        Path(profile_dir).mkdir(parents=True, exist_ok=True)
+
+        if is_main_process():
+            self.logger.info("=" * 80)
+            self.logger.info("PROFILER ENABLED")
+            self.logger.info("=" * 80)
+            self.logger.info(f"Profile Directory: {profile_dir}")
+            self.logger.info(f"Wait Steps: {wait_steps}")
+            self.logger.info(f"Warmup Steps: {warmup_steps}")
+            self.logger.info(f"Active Steps: {active_steps}")
+            self.logger.info(f"Total Profiling Steps: {wait_steps + warmup_steps + active_steps}")
+            self.logger.info("=" * 80)
+
+        # Create profiler with comprehensive settings
+        self.profiler = profile(
+            activities=[
+                ProfilerActivity.CPU,
+                ProfilerActivity.CUDA,
+            ],
+            schedule=schedule(
+                wait=wait_steps,
+                warmup=warmup_steps,
+                active=active_steps,
+                repeat=repeat
+            ),
+            on_trace_ready=self._on_trace_ready,
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            with_flops=True,
+            with_modules=True
+        )
+
+        # Start profiler
+        self.profiler.__enter__()
+        self.profiling_step = 0
+
+    def _on_trace_ready(self, prof):
+        """Callback when profiler trace is ready."""
+        if not is_main_process():
+            return
+
+        profile_dir = self.profiler_config.get('profile_dir', './profiling')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        # Export Chrome trace (JSON format)
+        trace_path = os.path.join(profile_dir, f'trace_{timestamp}.json')
+        prof.export_chrome_trace(trace_path)
+        self.logger.info(f"Exported Chrome trace to: {trace_path}")
+
+        # Export TensorBoard trace
+        tb_path = os.path.join(profile_dir, 'tensorboard')
+        Path(tb_path).mkdir(parents=True, exist_ok=True)
+        prof.export_stacks(os.path.join(tb_path, f'profiler_stacks_{timestamp}.txt'), "self_cuda_time_total")
+        self.logger.info(f"Exported TensorBoard stacks to: {tb_path}")
+
+    def _export_profiler_results(self):
+        """Export profiler summary and results."""
+        if not is_main_process() or self.profiler is None:
+            return
+
+        profile_dir = self.profiler_config.get('profile_dir', './profiling')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        try:
+            # Stop profiler
+            self.profiler.__exit__(None, None, None)
+
+            # Export summary statistics
+            summary_path = os.path.join(profile_dir, f'profiler_summary_{timestamp}.txt')
+            with open(summary_path, 'w') as f:
+                # Key averages by CPU time
+                f.write("=" * 80 + "\n")
+                f.write("TOP OPERATIONS BY CPU TIME\n")
+                f.write("=" * 80 + "\n")
+                f.write(str(self.profiler.key_averages().table(
+                    sort_by="cpu_time_total", row_limit=20
+                )))
+                f.write("\n\n")
+
+                # Key averages by CUDA time
+                f.write("=" * 80 + "\n")
+                f.write("TOP OPERATIONS BY CUDA TIME\n")
+                f.write("=" * 80 + "\n")
+                f.write(str(self.profiler.key_averages().table(
+                    sort_by="cuda_time_total", row_limit=20
+                )))
+                f.write("\n\n")
+
+                # Key averages by memory
+                f.write("=" * 80 + "\n")
+                f.write("TOP OPERATIONS BY MEMORY\n")
+                f.write("=" * 80 + "\n")
+                f.write(str(self.profiler.key_averages().table(
+                    sort_by="self_cuda_memory_usage", row_limit=20
+                )))
+                f.write("\n\n")
+
+                # Grouped by operation name
+                f.write("=" * 80 + "\n")
+                f.write("OPERATIONS GROUPED BY NAME\n")
+                f.write("=" * 80 + "\n")
+                f.write(str(self.profiler.key_averages(group_by_input_shape=True).table(
+                    sort_by="cuda_time_total", row_limit=30
+                )))
+
+            self.logger.info(f"Exported profiler summary to: {summary_path}")
+            self.logger.info("=" * 80)
+            self.logger.info("PROFILING COMPLETED")
+            self.logger.info("=" * 80)
+
+        except Exception as e:
+            self.logger.error(f"Error exporting profiler results: {e}")
+
+    def _train_epoch_with_profiler(self, epoch, total_epochs=None):
+        """Train epoch with profiler integration."""
+        if self.model is None or self.train_loader is None or self.optimizer is None:
+            raise RuntimeError("Model, dataloader, or optimizer not initialized")
+
+        self.model.train()
+        total_loss = 0.0
+        epoch_losses = {}
+
+        log_interval = self.config.get('logging', {}).get('tensorboard', {}).get('log_interval', 50)
+
+        # Check if profiling is active
+        profiling_active = self.profiler is not None
+        max_profiling_steps = 0
+        if profiling_active:
+            wait = self.profiler_config.get('wait', 2)
+            warmup = self.profiler_config.get('warmup', 1)
+            active = self.profiler_config.get('active', 5)
+            max_profiling_steps = wait + warmup + active
+
+        if is_main_process():
+            if total_epochs:
+                progress_percent = (epoch + 1) / total_epochs * 100
+                self.logger.info("═" * 60)
+                self.logger.info(f"EPOCH {epoch + 1}/{total_epochs} (Progress: {progress_percent:.1f}%)")
+                if profiling_active:
+                    self.logger.info(f"PROFILING: Will profile first {max_profiling_steps} iterations")
+                self.logger.info("═" * 60)
+            else:
+                self.logger.info("═" * 60)
+                self.logger.info(f"EPOCH {epoch + 1}")
+                self.logger.info("═" * 60)
+
+        import time
+        epoch_start_time = time.time()
+        self.epoch_start_times[epoch] = epoch_start_time
+
+        for batch_idx, batch in enumerate(self.train_loader):
+            iteration_start_time = time.time()
+            # Profile only first few iterations if profiling enabled
+            if profiling_active and batch_idx >= max_profiling_steps:
+                if is_main_process() and batch_idx == max_profiling_steps:
+                    self.logger.info(f"Profiling complete. Continuing normal training...")
+                # Continue training without profiling
+                profiling_active = False
+
+            # Check if GT data is available
+            if 'gt_bboxes_3d' not in batch or 'gt_labels_3d' not in batch:
+                if is_main_process():
+                    self.logger.warning(f"Training batch {batch_idx} missing GT data, skipping...")
+                if self.profiler:
+                    self.profiler.step()
+                continue
+
+            # Wrap batch processing in record_function for profiling
+            with record_function("batch_processing"):
+                # Move batch to device
+                with record_function("data_to_device"):
+                    batch_img = batch['img'].to(self.device)
+                    batch_gt_bboxes_3d = [bbox.to(self.device) for bbox in batch['gt_bboxes_3d']]
+                    batch_gt_labels_3d = [labels.to(self.device) for labels in batch['gt_labels_3d']]
+
+                # Forward pass
+                with record_function("forward_pass"):
+                    losses = self.model(
+                        img=batch_img,
+                        img_metas=batch['img_metas'],
+                        gt_bboxes_3d=batch_gt_bboxes_3d,
+                        gt_labels_3d=batch_gt_labels_3d,
+                        return_loss=True
+                    )
+
+                # Calculate total loss
+                with record_function("loss_calculation"):
+                    batch_total_loss = 0
+                    for key, value in losses.items():
+                        if torch.is_tensor(value) and value.requires_grad:
+                            batch_total_loss += value
+                            loss_val = value.item()
+                            if key not in epoch_losses:
+                                epoch_losses[key] = 0.0
+                            epoch_losses[key] += loss_val
+
+                # Backward pass
+                with record_function("backward_pass"):
+                    self.optimizer.zero_grad()
+                    batch_total_loss.backward()
+
+                # Gradient clipping
+                with record_function("gradient_clipping"):
+                    grad_clip_norm = self.config.get('training', {}).get('grad_clip', {}).get('max_norm', 35.0)
+                    if grad_clip_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip_norm)
+
+                # Optimizer step
+                with record_function("optimizer_step"):
+                    self.optimizer.step()
+
+            total_loss += batch_total_loss.item()
+
+            # Calculate iteration time and metrics
+            iteration_time = time.time() - iteration_start_time
+            self.iteration_times.append(iteration_time)
+
+            # Keep only recent iteration times (sliding window)
+            if len(self.iteration_times) > 100:
+                self.iteration_times = self.iteration_times[-100:]
+
+            batch_size = batch_img.size(0)
+            queue_length = batch_img.size(1)
+            self.total_samples_processed += batch_size
+
+            # Step profiler
+            if self.profiler:
+                self.profiler.step()
+                self.profiling_step += 1
+
+            # Enhanced logging with performance metrics
+            if is_main_process() and batch_idx % log_interval == 0:
+                from trainer.utils import calculate_training_metrics, format_duration, format_detailed_losses, get_world_size
+
+                avg_loss = total_loss / (batch_idx + 1)
+
+                # Calculate training metrics with world size
+                avg_iteration_time = sum(self.iteration_times[-10:]) / len(self.iteration_times[-10:])
+                world_size = get_world_size()
+                metrics = calculate_training_metrics(batch_size, avg_iteration_time, queue_length, world_size)
+
+                # Calculate ETA
+                remaining_batches = len(self.train_loader) - batch_idx - 1
+                eta_seconds = remaining_batches * avg_iteration_time
+                eta_str = format_duration(eta_seconds)
+
+                # Profile status
+                profile_status = f" [PROFILING {self.profiling_step}/{max_profiling_steps}]" if profiling_active else ""
+
+                # Main progress log
+                self.logger.info(f"Batch {batch_idx + 1}/{len(self.train_loader)} | "
+                               f"Loss: {batch_total_loss.item():.4f} | Avg: {avg_loss:.4f} | "
+                               f"LR: {self.optimizer.param_groups[0]['lr']:.2e}{profile_status}")
+
+                # Performance metrics log - show both total and per-GPU for distributed
+                if world_size > 1:
+                    self.logger.info(f"Speed: {metrics['samples_per_sec_total']:.1f} samples/sec total "
+                                   f"({metrics['samples_per_sec_per_gpu']:.1f}/gpu) | "
+                                   f"{metrics['images_per_sec_total']:.1f} images/sec total "
+                                   f"({metrics['images_per_sec_per_gpu']:.1f}/gpu) | "
+                                   f"Time/iter: {metrics['time_per_iteration']:.3f}s | ETA: {eta_str}")
+                else:
+                    self.logger.info(f"Speed: {metrics['samples_per_sec_total']:.1f} samples/sec | "
+                                   f"{metrics['images_per_sec_total']:.1f} images/sec | "
+                                   f"Time/iter: {metrics['time_per_iteration']:.3f}s | ETA: {eta_str}")
+
+                # Detailed losses with better formatting
+                formatted_losses = format_detailed_losses(losses)
+                self.logger.info(f"\n{formatted_losses}")
+
+                # TensorBoard logging - organized structure
+                if self.writer:
+                    global_step = epoch * len(self.train_loader) + batch_idx
+
+                    # Performance metrics - both total and per-GPU
+                    self.writer.add_scalar('performance/samples_per_sec_total', metrics['samples_per_sec_total'], global_step)
+                    self.writer.add_scalar('performance/samples_per_sec_per_gpu', metrics['samples_per_sec_per_gpu'], global_step)
+                    self.writer.add_scalar('performance/images_per_sec_total', metrics['images_per_sec_total'], global_step)
+                    self.writer.add_scalar('performance/images_per_sec_per_gpu', metrics['images_per_sec_per_gpu'], global_step)
+                    self.writer.add_scalar('performance/iteration_time', metrics['time_per_iteration'], global_step)
+                    self.writer.add_scalar('performance/learning_rate', self.optimizer.param_groups[0]['lr'], global_step)
+
+                    # Detailed train losses
+                    self.writer.add_scalar('train/batch_total_loss', batch_total_loss.item(), global_step)
+                    for key, value in losses.items():
+                        if torch.is_tensor(value):
+                            self.writer.add_scalar(f'train/{key}', value.item(), global_step)
+
+        # Step scheduler
+        if self.scheduler:
+            self.scheduler.step()
+
+        # Average losses for epoch
+        avg_epoch_loss = total_loss / len(self.train_loader)
+        for key in epoch_losses:
+            epoch_losses[key] /= len(self.train_loader)
+
+        # Average losses across all GPUs in distributed training
+        if dist.is_available() and dist.is_initialized():
+            loss_tensor = torch.tensor(avg_epoch_loss, device=self.device)
+            dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+            avg_epoch_loss = loss_tensor.item()
+
+            for key in epoch_losses:
+                loss_tensor = torch.tensor(epoch_losses[key], device=self.device)
+                dist.all_reduce(loss_tensor, op=dist.ReduceOp.AVG)
+                epoch_losses[key] = loss_tensor.item()
+
+        epoch_time = time.time() - epoch_start_time
+        if is_main_process():
+            self.logger.info(f"Epoch {epoch} completed in {epoch_time:.2f}s | Average Loss: {avg_epoch_loss:.4f}")
+
+            # Log epoch averages to TensorBoard - only main losses
+            if self.writer:
+                self.writer.add_scalar('averages/train_loss', avg_epoch_loss, epoch)
+
+                # Log epoch timing and performance
+                self.writer.add_scalar('performance/epoch_time', epoch_time, epoch)
+                if self.iteration_times:
+                    avg_iter_time = sum(self.iteration_times) / len(self.iteration_times)
+                    self.writer.add_scalar('performance/avg_iteration_time', avg_iter_time, epoch)
+
+        return avg_epoch_loss
 
     def validate_epoch(self, epoch):
         """Validate one epoch with distributed sampling."""
@@ -144,6 +507,20 @@ def main():
                        help='Directory for logs')
     parser.add_argument('--checkpoint-dir', type=str, default='./checkpoints',
                        help='Directory for checkpoints')
+
+    # Profiling arguments
+    parser.add_argument('--profile', action='store_true',
+                       help='Enable profiling mode')
+    parser.add_argument('--profile-dir', type=str, default='./profiling',
+                       help='Directory to save profiling traces')
+    parser.add_argument('--profile-wait', type=int, default=2,
+                       help='Number of warmup iterations before profiling starts')
+    parser.add_argument('--profile-warmup', type=int, default=1,
+                       help='Number of warmup iterations within profiling')
+    parser.add_argument('--profile-active', type=int, default=5,
+                       help='Number of active profiling iterations')
+    parser.add_argument('--profile-repeat', type=int, default=1,
+                       help='Number of times to repeat profiling cycle')
 
     args = parser.parse_args()
 
@@ -186,6 +563,20 @@ def main():
                 memory_gb = torch.cuda.get_device_properties(local_rank).total_memory / 1e9
                 logger.info(f"GPU Memory: {memory_gb:.1f} GB")
 
+        # Setup profiler configuration
+        profiler_config = None
+        if args.profile:
+            profiler_config = {
+                'enabled': True,
+                'profile_dir': args.profile_dir,
+                'wait': args.profile_wait,
+                'warmup': args.profile_warmup,
+                'active': args.profile_active,
+                'repeat': args.profile_repeat
+            }
+            if is_main_process():
+                logger.info("Profiling enabled - will profile first epoch only")
+
         # Create distributed trainer
         trainer = DistributedBEVFormerTrainer(
             config=config,
@@ -194,7 +585,8 @@ def main():
             log_dir=log_dir,
             checkpoint_dir=checkpoint_dir,
             rank=rank,
-            world_size=world_size
+            world_size=world_size,
+            profiler_config=profiler_config
         )
 
         # Setup training components

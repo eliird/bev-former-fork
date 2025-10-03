@@ -31,7 +31,10 @@ def calculate_nds_map(predictions: List[Dict], ground_truths: List[Dict],
     # Calculate mAP for each class and threshold
     class_aps = []
 
+    print(f"📊 Processing {len(class_names)} classes with {len(predictions)} samples...")
+
     for class_idx, class_name in enumerate(class_names):
+        print(f"  [{class_idx+1}/{len(class_names)}] Processing class '{class_name}'...", end=" ", flush=True)
         # Collect all predictions and GTs for this class
         class_predictions = []
         class_gts = []
@@ -63,15 +66,24 @@ def calculate_nds_map(predictions: List[Dict], ground_truths: List[Dict],
         # Calculate AP for this class across all thresholds
         if len(class_predictions) == 0 and len(class_gts) == 0:
             class_ap = 1.0  # Perfect score if no predictions and no GTs
+            print(f"No objects found. AP = {class_ap:.4f}")
         elif len(class_gts) == 0:
             class_ap = 0.0  # No GTs but have predictions = bad
+            print(f"{len(class_predictions)} predictions, 0 GTs. AP = {class_ap:.4f}")
         else:
+            print(f"{len(class_predictions)} predictions, {len(class_gts)} GTs.", end=" ", flush=True)
             class_ap = calculate_class_ap(class_predictions, class_gts, distance_thresholds)
+            print(f"AP = {class_ap:.4f}")
 
         class_aps.append(class_ap)
 
     # Calculate overall mAP
     mAP = np.mean(class_aps)
+
+    print(f"\n📈 Summary:")
+    print(f"   Overall mAP: {mAP:.4f}")
+    print(f"   Best performing class: {class_names[np.argmax(class_aps)]} ({np.max(class_aps):.4f})")
+    print(f"   Worst performing class: {class_names[np.argmin(class_aps)]} ({np.min(class_aps):.4f})")
 
     # For simplified NDS, we'll approximate it as mAP
     # (proper NDS needs translation/scale/orientation errors which are complex)
@@ -96,7 +108,9 @@ def calculate_class_ap(predictions: List[Dict], ground_truths: List[Dict],
     # Calculate AP for each distance threshold, then average
     threshold_aps = []
 
-    for dist_thresh in distance_thresholds:
+    for thresh_idx, dist_thresh in enumerate(distance_thresholds):
+        if len(distance_thresholds) > 1:
+            print(f"      Threshold {thresh_idx+1}/{len(distance_thresholds)} ({dist_thresh}m)...", end=" ", flush=True)
         # Reset GT matching status
         for gt in ground_truths:
             gt['matched'] = False
@@ -104,7 +118,13 @@ def calculate_class_ap(predictions: List[Dict], ground_truths: List[Dict],
         tp = []  # True positives
         fp = []  # False positives
 
-        for pred in predictions:
+        # Show progress for classes with many predictions
+        show_progress = len(predictions) > 100
+        progress_step = max(1, len(predictions) // 10) if show_progress else len(predictions) + 1
+
+        for pred_idx, pred in enumerate(predictions):
+            if show_progress and (pred_idx + 1) % progress_step == 0:
+                print(f"{pred_idx+1}/{len(predictions)}", end=" ", flush=True)
             # Find closest GT
             best_distance = float('inf')
             best_gt_idx = -1
@@ -149,8 +169,11 @@ def calculate_class_ap(predictions: List[Dict], ground_truths: List[Dict],
         ap /= 11.0
 
         threshold_aps.append(ap)
+        if len(distance_thresholds) > 1:
+            print(f"AP@{dist_thresh}m = {ap:.4f}")
 
-    return np.mean(threshold_aps)
+    final_ap = np.mean(threshold_aps)
+    return final_ap
 
 
 def extract_detections_from_model_output(model_output) -> Dict:
