@@ -110,10 +110,13 @@ class BEVFormerTrainer:
         betas = optimizer_config.get('betas', [0.9, 0.999])
         eps = optimizer_config.get('eps', 1e-8)
 
-        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, betas=betas, eps=eps)
+        # Use fused optimizer for 5-10% speedup (CUDA only)
+        fused = torch.cuda.is_available()
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, betas=betas, eps=eps, fused=fused)
 
         if is_main_process():
-            self.logger.info(f"Optimizer: AdamW, LR: {lr}, Weight Decay: {weight_decay}, Betas: {betas}, Eps: {eps}")
+            fused_str = " (fused)" if fused else ""
+            self.logger.info(f"Optimizer: AdamW{fused_str}, LR: {lr}, Weight Decay: {weight_decay}, Betas: {betas}, Eps: {eps}")
 
         # Create scheduler
         scheduler_config = training_config.get('scheduler', {})
@@ -635,8 +638,6 @@ class BEVFormerTrainer:
 
         for epoch in range(start_epoch, end_epoch):
             # Training
-            # TEST_VAL: REMOVE
-            avg_val_loss = self.validate_epoch(epoch)
             avg_train_loss = self.train_epoch(epoch, total_epochs=end_epoch)
 
             # Validation
@@ -901,7 +902,8 @@ class BEVFormerTrainer:
             queue_length=queue_length,
             training=training,
             point_cloud_range=point_cloud_range,
-            class_names=class_names
+            class_names=class_names,
+            use_cpu_augmentation=not self.use_gpu_aug  # Disable CPU aug when GPU aug is enabled
         )
 
         dataloader = data.DataLoader(

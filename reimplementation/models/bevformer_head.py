@@ -409,8 +409,12 @@ class BEVFormerHead(nn.Module):
         bbox_weights[pos_inds] = 1.0
 
         # DETR style: directly use GT boxes as targets
+        # Use clone() to avoid inplace modification of views (needed for AMP compatibility)
+        bbox_targets = bbox_targets.clone()
         if len(pos_inds) > 0:
-            bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
+            # Ensure dtype matches for AMP compatibility
+            pos_gt_bboxes = sampling_result.pos_gt_bboxes.to(bbox_targets.dtype)
+            bbox_targets[pos_inds] = pos_gt_bboxes
 
         
         return (labels, label_weights, bbox_targets, bbox_weights,

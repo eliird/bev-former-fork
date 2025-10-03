@@ -173,6 +173,7 @@ class PerceptionTransformer(nn.Module):
         if self.can_bus_norm:
             self.can_bus_mlp.add_module('norm', nn.LayerNorm(self.embed_dims))
 
+    @torch._dynamo.disable  # Disable torch.compile due to dynamic new_tensor() operations
     def get_bev_features(self,
                         mlvl_feats,
                         bev_queries,
@@ -207,8 +208,9 @@ class PerceptionTransformer(nn.Module):
             np.sin(bev_angle / 180 * np.pi) / grid_length_x / bev_w
         shift_y = shift_y * self.use_shift
         shift_x = shift_x * self.use_shift
-        shift = bev_queries.new_tensor(
-            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
+        # Convert to numpy array first for efficiency (avoid list of ndarrays warning)
+        shift_array = np.stack([shift_x, shift_y], axis=0)  # (2, bs)
+        shift = bev_queries.new_tensor(shift_array).permute(1, 0)  # xy, bs -> bs, xy
 
         if prev_bev is not None:
             # Ensure prev_bev has correct shape (bs, num_queries, embed_dims)

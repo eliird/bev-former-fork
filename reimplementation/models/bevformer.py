@@ -229,15 +229,16 @@ class BEVFormer(nn.Module):
         )
         return losses
         
+    @torch._dynamo.disable  # Disable torch.compile for this method due to dynamic operations
     def obtain_history_bev(self, imgs_queue, img_metas_list):
         """Obtain history BEV features iteratively.
-        
+
         To save GPU memory, gradients are not calculated.
-        
+
         Args:
             imgs_queue (Tensor): Queue of images (B, len_queue, N, C, H, W)
             img_metas_list (list[list[dict]]): Meta info for each frame
-            
+
         Returns:
             Tensor: BEV features from the last frame in queue
         """

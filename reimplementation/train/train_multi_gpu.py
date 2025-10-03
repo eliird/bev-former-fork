@@ -27,7 +27,8 @@ from trainer.utils import cleanup_distributed, is_main_process, get_rank
 class DistributedBEVFormerTrainer(BEVFormerTrainer):
     """BEVFormer trainer with distributed training support."""
 
-    def __init__(self, config, device, logger, log_dir, checkpoint_dir, rank, world_size, profiler_config=None):
+    def __init__(self, config, device, logger, log_dir, checkpoint_dir, rank, world_size,
+                 profiler_config=None, compile_config=None, amp_config=None):
         """Initialize distributed trainer.
 
         Args:
@@ -39,17 +40,89 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
             rank: Process rank
             world_size: Total number of processes
             profiler_config: Optional profiler configuration dict
+            compile_config: Optional torch.compile configuration dict
+            amp_config: Optional AMP configuration dict
         """
         super().__init__(config, device, logger, log_dir, checkpoint_dir)
         self.rank = rank
         self.world_size = world_size
         self.profiler_config = profiler_config or {}
+        self.compile_config = compile_config or {}
+        self.amp_config = amp_config or {}
         self.profiler = None
         self.profiling_step = 0
+
+        # Setup AMP scaler if enabled
+        self.use_amp = self.amp_config.get('enabled', False)
+        self.scaler = None
+        if self.use_amp:
+            self.scaler = torch.cuda.amp.GradScaler()
+            if is_main_process():
+                amp_dtype = self.amp_config.get('dtype', 'float16')
+                self.logger.info("=" * 80)
+                self.logger.info("AUTOMATIC MIXED PRECISION ENABLED")
+                self.logger.info("=" * 80)
+                self.logger.info(f"AMP dtype: {amp_dtype}")
+                self.logger.info("Expected: 2-3x faster training, 40-50% memory savings")
+                self.logger.info("=" * 80)
+
+        # Setup GPU augmentation (disabled by default, can be enabled)
+        self.use_gpu_aug = True  # Set to True to enable GPU augmentation
+        self.gpu_augmentation = None
+        if self.use_gpu_aug and torch.cuda.is_available():
+            try:
+                from augmentation_gpu import GPUAugmentation
+                self.gpu_augmentation = GPUAugmentation(training=True).to(self.device)
+                if is_main_process():
+                    self.logger.info("=" * 80)
+                    self.logger.info("GPU AUGMENTATION ENABLED (Experimental)")
+                    self.logger.info("=" * 80)
+                    self.logger.info("Photometric distortion will run on GPU")
+                    self.logger.info("Expected: 20-30% faster data pipeline")
+                    self.logger.info("=" * 80)
+            except ImportError:
+                if is_main_process():
+                    self.logger.warning("GPU augmentation requested but Kornia not installed")
+                    self.logger.warning("Install with: pip install kornia")
+                self.gpu_augmentation = None
 
     def setup_model(self):
         """Create and wrap model with DDP."""
         model = super().setup_model()
+
+        # Apply torch.compile() if enabled (before DDP wrapping)
+        if hasattr(self, 'compile_config') and self.compile_config.get('enabled', False):
+            if is_main_process():
+                self.logger.info("=" * 80)
+                self.logger.info("TORCH.COMPILE ENABLED")
+                self.logger.info("=" * 80)
+                self.logger.info(f"Compile Mode: {self.compile_config.get('mode', 'reduce-overhead')}")
+                self.logger.info(f"Compile Backend: {self.compile_config.get('backend', 'inductor')}")
+                self.logger.info("Note: First iteration will be slow due to compilation...")
+                self.logger.info("=" * 80)
+
+            try:
+                import torch
+                if hasattr(torch, 'compile'):
+                    # Use fullgraph=False to allow graph breaks for complex operations
+                    # This is necessary for BEVFormer's temporal modeling (obtain_history_bev)
+                    model = torch.compile(
+                        model,
+                        mode=self.compile_config.get('mode', 'reduce-overhead'),
+                        backend=self.compile_config.get('backend', 'inductor'),
+                        fullgraph=False,  # Allow graph breaks for complex operations
+                        dynamic=True  # Handle dynamic shapes better
+                    )
+                    if is_main_process():
+                        self.logger.info("✓ Model compiled successfully (fullgraph=False, dynamic=True)")
+                        self.logger.info("  Note: Graph breaks allowed for temporal BEV operations")
+                else:
+                    if is_main_process():
+                        self.logger.warning("torch.compile() not available (requires PyTorch 2.0+). Skipping compilation.")
+            except Exception as e:
+                if is_main_process():
+                    self.logger.error(f"Failed to compile model: {e}")
+                    self.logger.warning("Continuing without compilation...")
 
         # Wrap model with DDP - enable find_unused_parameters for complex models like BEVFormer
         model = DDP(model, device_ids=[self.rank], output_device=self.rank, find_unused_parameters=True)
@@ -84,7 +157,12 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
         training_config = self.config.get('training', {})
         train_batch_size = training_config.get('batch_size', 1)
         val_batch_size = training_config.get('val_batch_size', 1)
-        num_workers = training_config.get('num_workers', 4)
+        num_workers = training_config.get('num_workers', 32)
+
+        # Optimize num_workers for better performance (use more workers if available)
+        # # Recommended: 8-16 workers for faster data loading
+        # if num_workers < 8:
+        #     num_workers = min(8, os.cpu_count() or 4)
 
         from dataset import custom_collate_fn
 
@@ -95,7 +173,9 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
             num_workers=num_workers,
             collate_fn=custom_collate_fn,
             pin_memory=True,
-            drop_last=True
+            drop_last=True,
+            persistent_workers=True if num_workers > 0 else False,  # Keep workers alive between epochs
+            prefetch_factor=2 if num_workers > 0 else None  # Prefetch 2 batches per worker
         )
 
         val_loader = torch.utils.data.DataLoader(
@@ -105,7 +185,9 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
             num_workers=num_workers,
             collate_fn=custom_collate_fn,
             pin_memory=True,
-            drop_last=False
+            drop_last=False,
+            persistent_workers=True if num_workers > 0 else False,
+            prefetch_factor=2 if num_workers > 0 else None
         )
 
         if is_main_process():
@@ -325,15 +407,35 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
                     batch_gt_bboxes_3d = [bbox.to(self.device) for bbox in batch['gt_bboxes_3d']]
                     batch_gt_labels_3d = [labels.to(self.device) for labels in batch['gt_labels_3d']]
 
-                # Forward pass
+                # Apply GPU augmentation if enabled (runs on GPU after data transfer)
+                if self.gpu_augmentation is not None:
+                    with record_function("gpu_augmentation"):
+                        batch_img = self.gpu_augmentation(batch_img)
+
+                # Determine AMP dtype
+                amp_dtype = torch.float16
+                if self.use_amp and self.amp_config.get('dtype') == 'bfloat16':
+                    amp_dtype = torch.bfloat16
+
+                # Forward pass with AMP
                 with record_function("forward_pass"):
-                    losses = self.model(
-                        img=batch_img,
-                        img_metas=batch['img_metas'],
-                        gt_bboxes_3d=batch_gt_bboxes_3d,
-                        gt_labels_3d=batch_gt_labels_3d,
-                        return_loss=True
-                    )
+                    if self.use_amp:
+                        with torch.cuda.amp.autocast(dtype=amp_dtype):
+                            losses = self.model(
+                                img=batch_img,
+                                img_metas=batch['img_metas'],
+                                gt_bboxes_3d=batch_gt_bboxes_3d,
+                                gt_labels_3d=batch_gt_labels_3d,
+                                return_loss=True
+                            )
+                    else:
+                        losses = self.model(
+                            img=batch_img,
+                            img_metas=batch['img_metas'],
+                            gt_bboxes_3d=batch_gt_bboxes_3d,
+                            gt_labels_3d=batch_gt_labels_3d,
+                            return_loss=True
+                        )
 
                 # Calculate total loss
                 with record_function("loss_calculation"):
@@ -346,20 +448,30 @@ class DistributedBEVFormerTrainer(BEVFormerTrainer):
                                 epoch_losses[key] = 0.0
                             epoch_losses[key] += loss_val
 
-                # Backward pass
+                # Backward pass with AMP
                 with record_function("backward_pass"):
                     self.optimizer.zero_grad()
-                    batch_total_loss.backward()
+                    if self.use_amp:
+                        self.scaler.scale(batch_total_loss).backward()
+                    else:
+                        batch_total_loss.backward()
 
-                # Gradient clipping
+                # Gradient clipping with AMP
                 with record_function("gradient_clipping"):
                     grad_clip_norm = self.config.get('training', {}).get('grad_clip', {}).get('max_norm', 35.0)
                     if grad_clip_norm > 0:
+                        if self.use_amp:
+                            # Unscale before clipping
+                            self.scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), grad_clip_norm)
 
-                # Optimizer step
+                # Optimizer step with AMP
                 with record_function("optimizer_step"):
-                    self.optimizer.step()
+                    if self.use_amp:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        self.optimizer.step()
 
             total_loss += batch_total_loss.item()
 
@@ -522,6 +634,23 @@ def main():
     parser.add_argument('--profile-repeat', type=int, default=1,
                        help='Number of times to repeat profiling cycle')
 
+    # Optimization arguments
+    parser.add_argument('--compile', action='store_true',
+                       help='Enable torch.compile() for model optimization (PyTorch 2.0+)')
+    parser.add_argument('--compile-mode', type=str, default='reduce-overhead',
+                       choices=['default', 'reduce-overhead', 'max-autotune'],
+                       help='Compilation mode: default (balanced), reduce-overhead (faster), max-autotune (slowest compile, fastest run)')
+    parser.add_argument('--compile-backend', type=str, default='inductor',
+                       choices=['inductor', 'aot_eager', 'cudagraphs'],
+                       help='Compilation backend (inductor is recommended)')
+
+    # Mixed Precision Training
+    parser.add_argument('--amp', action='store_true',
+                       help='Enable Automatic Mixed Precision (AMP) training')
+    parser.add_argument('--amp-dtype', type=str, default='float16',
+                       choices=['float16', 'bfloat16'],
+                       help='AMP dtype: float16 (default) or bfloat16 (better stability on A100/H100)')
+
     args = parser.parse_args()
 
     try:
@@ -577,6 +706,27 @@ def main():
             if is_main_process():
                 logger.info("Profiling enabled - will profile first epoch only")
 
+        # Setup compile configuration
+        compile_config = None
+        if args.compile:
+            compile_config = {
+                'enabled': True,
+                'mode': args.compile_mode,
+                'backend': args.compile_backend
+            }
+            if is_main_process():
+                logger.info(f"torch.compile() enabled with mode='{args.compile_mode}', backend='{args.compile_backend}'")
+
+        # Setup AMP configuration
+        amp_config = None
+        if args.amp:
+            amp_config = {
+                'enabled': True,
+                'dtype': args.amp_dtype
+            }
+            if is_main_process():
+                logger.info(f"Automatic Mixed Precision (AMP) enabled with dtype='{args.amp_dtype}'")
+
         # Create distributed trainer
         trainer = DistributedBEVFormerTrainer(
             config=config,
@@ -586,7 +736,9 @@ def main():
             checkpoint_dir=checkpoint_dir,
             rank=rank,
             world_size=world_size,
-            profiler_config=profiler_config
+            profiler_config=profiler_config,
+            compile_config=compile_config,
+            amp_config=amp_config
         )
 
         # Setup training components

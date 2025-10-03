@@ -52,13 +52,15 @@ class NuScenesDataset(Dataset):
                  class_names: List[str] = [
                      'car', 'truck', 'construction_vehicle', 'bus', 'trailer',
                      'barrier', 'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
-                 ]):
+                 ],
+                 use_cpu_augmentation: bool = True):
         
         self.data_file = data_file
         self.queue_length = queue_length
         self.training = training
         self.point_cloud_range = point_cloud_range
         self.class_names = class_names
+        self.use_cpu_augmentation = use_cpu_augmentation
         
         # Load the dataset
         print(f"Loading nuScenes dataset from {data_file}...")
@@ -136,10 +138,11 @@ class NuScenesDataset(Dataset):
         
         transforms = []
         transforms.append(LoadMultiViewImageFromFiles(to_float32=True))
-        
-        if self.training:
+
+        # Only add CPU photometric distortion if not using GPU augmentation
+        if self.training and self.use_cpu_augmentation:
             transforms.append(PhotoMetricDistortionMultiViewImage())
-        
+
         transforms.append(LoadAnnotations3D(with_bbox_3d=True, with_label_3d=True, with_attr_label=False))
         transforms.append(ObjectRangeFilter(point_cloud_range=self.point_cloud_range))
         transforms.append(ObjectNameFilter(classes=self.class_names))
